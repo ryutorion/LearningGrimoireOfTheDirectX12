@@ -1,0 +1,2 @@
+# LearningGrimoireOfDirectX12
+DirectX 12の魔導書での学習
