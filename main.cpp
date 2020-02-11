@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <Windows.h>
+#include "renderer_dx12.h"
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -69,6 +70,12 @@ int WINAPI WinMain(
 		return 0;
 	}
 
+	RendererDX12 renderer;
+	if(!renderer.initialize(client_width, client_height, hWnd))
+	{
+		return 0;
+	}
+
 	ShowWindow(hWnd, nShowCmd);
 
 	MSG msg {};
@@ -84,6 +91,8 @@ int WINAPI WinMain(
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+
+		renderer.render();
 	}
 
 	return static_cast<int>(msg.wParam);
