@@ -22,4 +22,11 @@ target_link_libraries(
 	PRIVATE
 	d3d12.lib
 	dxgi.lib
+	d3dcompiler.lib
+)
+
+target_compile_definitions(
+	LearningGrimoireOfTheDirectX12
+	PRIVATE
+	WORKING_DIR="${CMAKE_CURRENT_LIST_DIR}"
 )

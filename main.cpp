@@ -11,6 +11,8 @@ int WINAPI WinMain(
 	_In_ int nShowCmd
 )
 {
+	SetCurrentDirectory(WORKING_DIR);
+
 	WNDCLASSEX wcx;
 	wcx.cbSize = sizeof(wcx);
 	wcx.style = 0;

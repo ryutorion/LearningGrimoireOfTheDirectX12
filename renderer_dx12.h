@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <DirectXMath.h>
 #include <wrl/client.h>
 
 class RendererDX12
@@ -25,6 +26,10 @@ private:
 	bool createRTVDescriptorHeap();
 	bool createRTVs();
 	bool createFence();
+	bool createVertexBuffer();
+	bool createIndexBuffer();
+	bool createRootSignature();
+	bool createGraphicsPipelineState();
 private:
 	uint32_t mWidth = 0;
 	uint32_t mHeight = 0;
@@ -53,6 +58,19 @@ private:
 	uint64_t mFenceValue = 0;
 	Microsoft::WRL::ComPtr<ID3D12Fence> mpFence;
 	HANDLE mhFenceEvent = nullptr;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpVertexBuffer;
+	D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpIndexBuffer;
+	D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
+
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> mpRootSignature;
+
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> mpGraphicsPipelineState;
+
+	D3D12_VIEWPORT mViewport;
+	D3D12_RECT mScissorRect;
 };
 
 #endif // RENDERER_DX12_H_INCLUDED
