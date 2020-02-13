@@ -1,6 +1,7 @@
 #include "renderer_dx12.h"
 #include <algorithm>
 #include <d3dcompiler.h>
+#include <DirectXTex.h>
 
 using namespace Microsoft::WRL;
 using namespace DirectX;
