@@ -30,6 +30,7 @@ private:
 	bool createIndexBuffer();
 	bool createRootSignature();
 	bool createGraphicsPipelineState();
+	bool loadTexture();
 private:
 	uint32_t mWidth = 0;
 	uint32_t mHeight = 0;
@@ -71,6 +72,9 @@ private:
 
 	D3D12_VIEWPORT mViewport;
 	D3D12_RECT mScissorRect;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpTexture;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpSRVDescriptorHeap;
 };
 
 #endif // RENDERER_DX12_H_INCLUDED

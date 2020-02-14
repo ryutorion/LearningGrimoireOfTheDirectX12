@@ -13,6 +13,12 @@ int WINAPI WinMain(
 {
 	SetCurrentDirectory(WORKING_DIR);
 
+	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if(FAILED(hr))
+	{
+		return 0;
+	}
+
 	WNDCLASSEX wcx;
 	wcx.cbSize = sizeof(wcx);
 	wcx.style = 0;

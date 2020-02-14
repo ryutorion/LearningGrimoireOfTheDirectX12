@@ -101,6 +101,11 @@ bool RendererDX12::initialize(uint32_t width, uint32_t height, HWND hWnd)
 	mScissorRect.right = mWidth;
 	mScissorRect.bottom = mHeight;
 
+	if(!loadTexture())
+	{
+		return false;
+	}
+
 	return true;
 }
 
@@ -138,6 +143,8 @@ bool RendererDX12::render()
 	mpGraphicsCommandList->RSSetViewports(1, &mViewport);
 	mpGraphicsCommandList->RSSetScissorRects(1, &mScissorRect);
 	mpGraphicsCommandList->SetGraphicsRootSignature(mpRootSignature.Get());
+	mpGraphicsCommandList->SetDescriptorHeaps(1, mpSRVDescriptorHeap.GetAddressOf());
+	mpGraphicsCommandList->SetGraphicsRootDescriptorTable(0, mpSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 
 	mpGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	mpGraphicsCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
@@ -330,6 +337,12 @@ bool RendererDX12::createRTVs()
 {
 	HRESULT hr = S_OK;
 
+	D3D12_RENDER_TARGET_VIEW_DESC render_target_view_desc;
+	render_target_view_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	render_target_view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+	render_target_view_desc.Texture2D.MipSlice = 0;
+	render_target_view_desc.Texture2D.PlaneSlice = 0;
+
 	auto handle = mpRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 
 	for(uint32_t i = 0; i < SwapChainBufferCount; ++i)
@@ -342,7 +355,7 @@ bool RendererDX12::createRTVs()
 
 		mpDevice->CreateRenderTargetView(
 			mpBackBuffers[i].Get(),
-			nullptr,
+			&render_target_view_desc,
 			handle
 		);
 		handle.ptr += mRTVDescriptorSize;
@@ -370,12 +383,18 @@ bool RendererDX12::createFence()
 
 bool RendererDX12::createVertexBuffer()
 {
-	XMFLOAT3 vertices[]
+	struct Vertex
 	{
-		{ -0.4f, -0.7f, 0.0f },
-		{ -0.4f,  0.7f, 0.0f },
-		{  0.4f, -0.7f, 0.0f },
-		{  0.4f,  0.7f, 0.0f },
+		XMFLOAT3 pos;
+		XMFLOAT2 uv;
+	};
+
+	Vertex vertices[]
+	{
+		{ { -0.5f, -0.9f, 0.0f }, { 0.0f, 1.0f } },
+		{ { -0.5f,  0.9f, 0.0f }, { 0.0f, 0.0f } },
+		{ {  0.5f, -0.9f, 0.0f }, { 1.0f, 1.0f } },
+		{ {  0.5f,  0.9f, 0.0f }, { 1.0f, 0.0f } },
 	};
 
 	D3D12_HEAP_PROPERTIES heap_properties;
@@ -482,11 +501,39 @@ bool RendererDX12::createIndexBuffer()
 
 bool RendererDX12::createRootSignature()
 {
+	D3D12_DESCRIPTOR_RANGE descriptor_ranges[1];
+	descriptor_ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	descriptor_ranges[0].NumDescriptors = 1;
+	descriptor_ranges[0].BaseShaderRegister = 0;
+	descriptor_ranges[0].RegisterSpace = 0;
+	descriptor_ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+	D3D12_ROOT_PARAMETER root_parameters[1];
+	root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	root_parameters[0].DescriptorTable.NumDescriptorRanges = _countof(descriptor_ranges);
+	root_parameters[0].DescriptorTable.pDescriptorRanges = descriptor_ranges;
+	root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+	D3D12_STATIC_SAMPLER_DESC static_samplers[1];
+	static_samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+	static_samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	static_samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	static_samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	static_samplers[0].MipLODBias = 0.0f;
+	static_samplers[0].MaxAnisotropy = 0;
+	static_samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+	static_samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+	static_samplers[0].MinLOD = 0.0f;
+	static_samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+	static_samplers[0].ShaderRegister = 0;
+	static_samplers[0].RegisterSpace = 0;
+	static_samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
 	D3D12_ROOT_SIGNATURE_DESC root_signature_desc;
-	root_signature_desc.NumParameters = 0;
-	root_signature_desc.pParameters = nullptr;
-	root_signature_desc.NumStaticSamplers = 0;
-	root_signature_desc.pStaticSamplers = nullptr;
+	root_signature_desc.NumParameters = _countof(root_parameters);
+	root_signature_desc.pParameters = root_parameters;
+	root_signature_desc.NumStaticSamplers = _countof(static_samplers);
+	root_signature_desc.pStaticSamplers = static_samplers;
 	root_signature_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ComPtr<ID3DBlob> p_root_signature_blob;
@@ -628,7 +675,7 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.DepthStencilState.BackFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
 	graphics_pipeline_state_desc.DepthStencilState.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
 
-	D3D12_INPUT_ELEMENT_DESC input_element_descs[1];
+	D3D12_INPUT_ELEMENT_DESC input_element_descs[2];
 	input_element_descs[0].SemanticName = "POSITION";
 	input_element_descs[0].SemanticIndex = 0;
 	input_element_descs[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
@@ -637,8 +684,17 @@ bool RendererDX12::createGraphicsPipelineState()
 	input_element_descs[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 	input_element_descs[0].InstanceDataStepRate = 0;
 
+	input_element_descs[1].SemanticName = "TEXCOORD";
+	input_element_descs[1].SemanticIndex = 0;
+	input_element_descs[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+	input_element_descs[1].InputSlot = 0;
+	input_element_descs[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+	input_element_descs[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+	input_element_descs[1].InstanceDataStepRate = 0;
+
+
 	graphics_pipeline_state_desc.InputLayout.pInputElementDescs = input_element_descs;
-	graphics_pipeline_state_desc.InputLayout.NumElements = 1;
+	graphics_pipeline_state_desc.InputLayout.NumElements = _countof(input_element_descs);
 
 	graphics_pipeline_state_desc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
 
@@ -646,7 +702,7 @@ bool RendererDX12::createGraphicsPipelineState()
 
 	graphics_pipeline_state_desc.NumRenderTargets = 1;
 
-	graphics_pipeline_state_desc.RTVFormats[0] = mSwapChainBufferFormat;
+	graphics_pipeline_state_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	graphics_pipeline_state_desc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN;
 	graphics_pipeline_state_desc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
 	graphics_pipeline_state_desc.RTVFormats[3] = DXGI_FORMAT_UNKNOWN;
@@ -673,6 +729,94 @@ bool RendererDX12::createGraphicsPipelineState()
 	{
 		return false;
 	}
+
+	return true;
+}
+
+bool RendererDX12::loadTexture()
+{
+	TexMetadata meta_data;
+	ScratchImage scratch_image;
+
+	HRESULT hr = LoadFromWICFile(L"img/textest.png", WIC_FLAGS_NONE, &meta_data, scratch_image);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	auto image = scratch_image.GetImage(0, 0, 0);
+
+	D3D12_HEAP_PROPERTIES heap_properties;
+	heap_properties.Type = D3D12_HEAP_TYPE_CUSTOM;
+	heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+	heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+	heap_properties.CreationNodeMask = 0;
+	heap_properties.VisibleNodeMask = 0;
+
+	D3D12_RESOURCE_DESC resource_desc;
+	resource_desc.Dimension = static_cast<D3D12_RESOURCE_DIMENSION>(meta_data.dimension);
+	resource_desc.Alignment = 0;
+	resource_desc.Width = meta_data.width;
+	resource_desc.Height = meta_data.height;
+	resource_desc.DepthOrArraySize = meta_data.arraySize;
+	resource_desc.MipLevels = meta_data.mipLevels;
+	resource_desc.Format = meta_data.format;
+	resource_desc.SampleDesc.Count = 1;
+	resource_desc.SampleDesc.Quality = 0;
+	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+	hr = mpDevice->CreateCommittedResource(
+		&heap_properties,
+		D3D12_HEAP_FLAG_NONE,
+		&resource_desc,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&mpTexture)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	hr = mpTexture->WriteToSubresource(
+		0,
+		nullptr,
+		image->pixels,
+		image->rowPitch,
+		image->slicePitch
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc;
+	descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	descriptor_heap_desc.NumDescriptors = 1;
+	descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	descriptor_heap_desc.NodeMask = 0;
+
+	hr = mpDevice->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&mpSRVDescriptorHeap));
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
+	srv_desc.Format = meta_data.format;
+	srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv_desc.Texture2D.MostDetailedMip = 0;
+	srv_desc.Texture2D.MipLevels = 1;
+	srv_desc.Texture2D.PlaneSlice = 0;
+	srv_desc.Texture2D.ResourceMinLODClamp = 0;
+
+	mpDevice->CreateShaderResourceView(
+		mpTexture.Get(),
+		&srv_desc,
+		mpSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart()
+	);
 
 	return true;
 }
