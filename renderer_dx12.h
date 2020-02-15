@@ -31,6 +31,7 @@ private:
 	bool createRootSignature();
 	bool createGraphicsPipelineState();
 	bool loadTexture();
+	bool createConstantBuffer();
 private:
 	uint32_t mWidth = 0;
 	uint32_t mHeight = 0;
@@ -75,6 +76,13 @@ private:
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpTexture;
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpSRVDescriptorHeap;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpConstantBuffer;
+	void * mpMappedConstantBuffer = nullptr;
+
+	DirectX::XMMATRIX mWorld;
+	DirectX::XMMATRIX mView;
+	DirectX::XMMATRIX mProjection;
 };
 
 #endif // RENDERER_DX12_H_INCLUDED
