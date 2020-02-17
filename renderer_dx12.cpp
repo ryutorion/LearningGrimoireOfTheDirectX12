@@ -122,7 +122,7 @@ bool RendererDX12::render()
 
 	angle += 0.05f;
 	mWorld = XMMatrixRotationY(angle);
-	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = mWorld * mView * mProjection;
+	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = XMMatrixTranspose(mWorld * mView * mProjection);
 
 	auto back_buffer_index = mpSwapChain->GetCurrentBackBufferIndex();
 
@@ -844,7 +844,7 @@ bool RendererDX12::createConstantBuffer()
 		return false;
 	}
 
-	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = mWorld * mView * mProjection;
+	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = XMMatrixTranspose(mWorld * mView * mProjection);
 
 	auto handle = mpSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	handle.ptr += mpDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
