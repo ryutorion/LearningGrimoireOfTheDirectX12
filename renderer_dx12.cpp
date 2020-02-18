@@ -1,9 +1,11 @@
 #include "renderer_dx12.h"
 #include <algorithm>
+#include <fstream>
 #include <d3dcompiler.h>
 #include <DirectXTex.h>
 #include <d3dx12.h>
 
+using namespace std;
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
@@ -70,6 +72,11 @@ bool RendererDX12::initialize(uint32_t width, uint32_t height, HWND hWnd)
 		return false;
 	}
 
+	if(!loadModel())
+	{
+		return false;
+	}
+
 	if(!createVertexBuffer())
 	{
 		return false;
@@ -120,7 +127,7 @@ bool RendererDX12::render()
 	static uint32_t frame = 0;
 	static float angle = 0.0f;
 
-	angle += 0.05f;
+	// angle += 0.05f;
 	mWorld = XMMatrixRotationY(angle);
 	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = XMMatrixTranspose(mWorld * mView * mProjection);
 
@@ -141,13 +148,7 @@ bool RendererDX12::render()
 	rtv_handle.ptr += back_buffer_index * mRTVDescriptorSize;
 	mpGraphicsCommandList->OMSetRenderTargets(1, &rtv_handle, FALSE, nullptr);
 
-	float clear_color[]
-	{
-		((frame >> 16) & 0xFF) / 255.0f,
-		((frame >> 8) & 0xff) / 255.0f,
-		((frame >> 0) & 0xff) / 255.0f,
-		1.0f
-	};
+	float clear_color[] { 1.0f, 1.0f, 1.0f, 1.0f };
 	mpGraphicsCommandList->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 	++frame;
 
@@ -159,10 +160,12 @@ bool RendererDX12::render()
 	mpGraphicsCommandList->SetGraphicsRootDescriptorTable(0, mpSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 
 	mpGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	// mpGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
 	mpGraphicsCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
 	mpGraphicsCommandList->IASetIndexBuffer(&mIndexBufferView);
 
-	mpGraphicsCommandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+	mpGraphicsCommandList->DrawIndexedInstanced(mIndices.size(), 1, 0, 0, 0);
+	// mpGraphicsCommandList->DrawInstanced(mVertices.size(), 1, 0, 0);
 
 	mpGraphicsCommandList->ResourceBarrier(
 		1,
@@ -398,26 +401,82 @@ bool RendererDX12::createFence()
 	return true;
 }
 
+bool RendererDX12::loadModel()
+{
+	ifstream fin("model/miku.pmd", ios::in | ios::binary);
+	if(!fin)
+	{
+		return false;
+	}
+
+#include <pshpack1.h>
+	struct PMDHeader
+	{
+		char signature[3];
+		float version;
+		char modelName[20];
+		char comment[256];
+	};
+#include <poppack.h>
+
+	PMDHeader header;
+	fin.read(reinterpret_cast<char *>(&header), sizeof(header));
+	if(strncmp(header.signature, "Pmd", 3) != 0)
+	{
+		return false;
+	}
+
+	uint32_t vertex_count = 0;
+	fin.read(reinterpret_cast<char *>(&vertex_count), sizeof(vertex_count));
+
+#include <pshpack2.h>
+	struct PMDVertex
+	{
+		XMFLOAT3 position;
+		XMFLOAT3 normal;
+		XMFLOAT2 uv;
+		uint16_t boneNo[2];
+		uint8_t boneWeight;
+		uint8_t edgeFlag;
+	};
+#include <poppack.h>
+
+	{
+		vector<PMDVertex> vertices(vertex_count);
+		fin.read(reinterpret_cast<char *>(vertices.data()), sizeof(vertices[0]) * vertices.size());
+
+		mVertices.resize(vertices.size());
+		for(uint32_t i = 0; i < vertex_count; ++i)
+		{
+			PMDVertex & src = vertices[i];
+			Vertex & dst = mVertices[i];
+
+			dst.position = { src.position.x, src.position.y, src.position.z };
+			dst.normal = { src.normal.x, src.normal.y, src.normal.z };
+			dst.uv = { src.uv.x, src.uv.y };
+			dst.bones[0] = src.boneNo[0];
+			dst.bones[1] = src.boneNo[1];
+			dst.weight = src.boneWeight;
+			dst.edge = src.edgeFlag;
+		}
+	}
+
+	uint32_t index_count = 0;
+	fin.read(reinterpret_cast<char *>(&index_count), sizeof(index_count));
+
+	mIndices.resize(index_count);
+	fin.read(reinterpret_cast<char *>(mIndices.data()), sizeof(mIndices[0]) * mIndices.size());
+
+	return true;
+}
+
 bool RendererDX12::createVertexBuffer()
 {
-	struct Vertex
-	{
-		XMFLOAT3 pos;
-		XMFLOAT2 uv;
-	};
-
-	Vertex vertices[]
-	{
-		{ { -1.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },
-		{ { -1.0f,  1.0f, 0.0f }, { 0.0f, 0.0f } },
-		{ {  1.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },
-		{ {  1.0f,  1.0f, 0.0f }, { 1.0f, 0.0f } },
-	};
-
+	size_t buffer_size = sizeof(mVertices[0]) * mVertices.size();
 	HRESULT hr = mpDevice->CreateCommittedResource(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(vertices)),
+		&CD3DX12_RESOURCE_DESC::Buffer(buffer_size),
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&mpVertexBuffer)
@@ -430,29 +489,25 @@ bool RendererDX12::createVertexBuffer()
 	void * p_dst = nullptr;
 	mpVertexBuffer->Map(0, nullptr, &p_dst);
 
-	memcpy(p_dst, vertices, sizeof(vertices));
+	memcpy(p_dst, mVertices.data(), buffer_size);
 
 	mpVertexBuffer->Unmap(0, nullptr);
 
 	mVertexBufferView.BufferLocation = mpVertexBuffer->GetGPUVirtualAddress();
-	mVertexBufferView.SizeInBytes = sizeof(vertices);
-	mVertexBufferView.StrideInBytes = sizeof(vertices[0]);
+	mVertexBufferView.SizeInBytes = buffer_size;
+	mVertexBufferView.StrideInBytes = sizeof(mVertices[0]);
 
 	return true;
 }
 
 bool RendererDX12::createIndexBuffer()
 {
-	uint32_t indices[]
-	{
-		0, 1, 2,
-		2, 1, 3,
-	};
+	size_t buffer_size = sizeof(mIndices[0]) * mIndices.size();
 
 	HRESULT hr = mpDevice->CreateCommittedResource(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(indices)),
+		&CD3DX12_RESOURCE_DESC::Buffer(buffer_size),
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&mpIndexBuffer)
@@ -465,13 +520,13 @@ bool RendererDX12::createIndexBuffer()
 	void * p_dst = nullptr;
 	mpIndexBuffer->Map(0, nullptr, &p_dst);
 
-	memcpy(p_dst, indices, sizeof(indices));
+	memcpy(p_dst, mIndices.data(), buffer_size);
 
 	mpIndexBuffer->Unmap(0, nullptr);
 
 	mIndexBufferView.BufferLocation = mpIndexBuffer->GetGPUVirtualAddress();
-	mIndexBufferView.SizeInBytes = sizeof(indices);
-	mIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+	mIndexBufferView.SizeInBytes = buffer_size;
+	mIndexBufferView.Format = DXGI_FORMAT_R16_UINT;
 
 	return true;
 }
@@ -659,23 +714,46 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.DepthStencilState.BackFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
 	graphics_pipeline_state_desc.DepthStencilState.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
 
-	D3D12_INPUT_ELEMENT_DESC input_element_descs[2];
+	D3D12_INPUT_ELEMENT_DESC input_element_descs[5];
 	input_element_descs[0].SemanticName = "POSITION";
 	input_element_descs[0].SemanticIndex = 0;
 	input_element_descs[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
 	input_element_descs[0].InputSlot = 0;
-	input_element_descs[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+	input_element_descs[0].AlignedByteOffset = offsetof(Vertex, position);
 	input_element_descs[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 	input_element_descs[0].InstanceDataStepRate = 0;
 
-	input_element_descs[1].SemanticName = "TEXCOORD";
+	input_element_descs[1].SemanticName = "NORMAL";
 	input_element_descs[1].SemanticIndex = 0;
-	input_element_descs[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+	input_element_descs[1].Format = DXGI_FORMAT_R32G32B32_FLOAT;
 	input_element_descs[1].InputSlot = 0;
-	input_element_descs[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+	input_element_descs[1].AlignedByteOffset = offsetof(Vertex, normal);
 	input_element_descs[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 	input_element_descs[1].InstanceDataStepRate = 0;
 
+	input_element_descs[2].SemanticName = "TEXCOORD";
+	input_element_descs[2].SemanticIndex = 0;
+	input_element_descs[2].Format = DXGI_FORMAT_R32G32_FLOAT;
+	input_element_descs[2].InputSlot = 0;
+	input_element_descs[2].AlignedByteOffset = offsetof(Vertex, uv);
+	input_element_descs[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+	input_element_descs[2].InstanceDataStepRate = 0;
+
+	input_element_descs[3].SemanticName = "BONES";
+	input_element_descs[3].SemanticIndex = 0;
+	input_element_descs[3].Format = DXGI_FORMAT_R16G16_UINT;
+	input_element_descs[3].InputSlot = 0;
+	input_element_descs[3].AlignedByteOffset = offsetof(Vertex, bones);
+	input_element_descs[3].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+	input_element_descs[3].InstanceDataStepRate = 0;
+
+	input_element_descs[4].SemanticName = "WEIGHT";
+	input_element_descs[4].SemanticIndex = 0;
+	input_element_descs[4].Format = DXGI_FORMAT_R8G8_UINT;
+	input_element_descs[4].InputSlot = 0;
+	input_element_descs[4].AlignedByteOffset = offsetof(Vertex, weight);
+	input_element_descs[4].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+	input_element_descs[4].InstanceDataStepRate = 0;
 
 	graphics_pipeline_state_desc.InputLayout.pInputElementDescs = input_element_descs;
 	graphics_pipeline_state_desc.InputLayout.NumElements = _countof(input_element_descs);
@@ -683,6 +761,7 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
 
 	graphics_pipeline_state_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	// graphics_pipeline_state_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
 
 	graphics_pipeline_state_desc.NumRenderTargets = 1;
 
@@ -809,8 +888,8 @@ bool RendererDX12::createConstantBuffer()
 {
 	mWorld = XMMatrixRotationY(XM_PIDIV4);
 
-	XMFLOAT3 eye(0.0f, 0.0f, -5.0f);
-	XMFLOAT3 at(0.0f, 0.0f, 0.0f);
+	XMFLOAT3 eye(0.0f, 10.0f, -15.0f);
+	XMFLOAT3 at(0.0f, 10.0f, 0.0f);
 	XMFLOAT3 up(0.0f, 1.0f, 0.0f);
 	mView = XMMatrixLookAtLH(
 		XMLoadFloat3(&eye),
@@ -822,7 +901,7 @@ bool RendererDX12::createConstantBuffer()
 		XM_PIDIV2,
 		static_cast<float>(mWidth) / static_cast<float>(mHeight),
 		1.0f,
-		10.0f
+		100.0f
 	);
 
 	HRESULT hr = mpDevice->CreateCommittedResource(

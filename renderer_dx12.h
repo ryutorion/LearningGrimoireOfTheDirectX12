@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <DirectXMath.h>
@@ -26,6 +27,7 @@ private:
 	bool createRTVDescriptorHeap();
 	bool createRTVs();
 	bool createFence();
+	bool loadModel();
 	bool createVertexBuffer();
 	bool createIndexBuffer();
 	bool createRootSignature();
@@ -60,6 +62,19 @@ private:
 	uint64_t mFenceValue = 0;
 	Microsoft::WRL::ComPtr<ID3D12Fence> mpFence;
 	HANDLE mhFenceEvent = nullptr;
+
+	struct Vertex
+	{
+		DirectX::XMFLOAT3A position;
+		DirectX::XMFLOAT3A normal;
+		DirectX::XMFLOAT2A uv;
+		uint16_t bones[2];
+		uint8_t weight;
+		uint8_t edge;
+	};
+	std::vector<Vertex> mVertices;
+
+	std::vector<uint16_t> mIndices;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpVertexBuffer;
 	D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
