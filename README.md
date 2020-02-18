@@ -1,2 +1,6 @@
 # LearningGrimoireOfDirectX12
 DirectX 12の魔導書での学習
+
+DirectXTexは事前にビルドしていて，CMakeLists.txtからVisual Studioのプロジェクトを生成する際にDirectXTexのリポジトリを指す前提．
+
+画像やモデルデータはDirectX 12の魔導書を参考に入手する前提．初音ミクのモデルは，miku.pmdに名前を変えてます．
