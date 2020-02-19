@@ -137,9 +137,11 @@ bool RendererDX12::render()
 	static uint32_t frame = 0;
 	static float angle = 0.0f;
 
-	// angle += 0.05f;
+	angle += 0.05f;
 	mWorld = XMMatrixRotationY(angle);
-	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = XMMatrixTranspose(mWorld * mView * mProjection);
+
+	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[0] = XMMatrixTranspose(mWorld);
+	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
 
 	auto back_buffer_index = mpSwapChain->GetCurrentBackBufferIndex();
 
@@ -995,7 +997,7 @@ bool RendererDX12::createConstantBuffer()
 	HRESULT hr = mpDevice->CreateCommittedResource(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer((sizeof(XMMATRIX) + 0xff) & ~0xff),
+		&CD3DX12_RESOURCE_DESC::Buffer((sizeof(XMMATRIX) * 2 + 0xff) & ~0xff),
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&mpConstantBuffer)
@@ -1011,7 +1013,8 @@ bool RendererDX12::createConstantBuffer()
 		return false;
 	}
 
-	*reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer) = XMMatrixTranspose(mWorld * mView * mProjection);
+	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[0] = XMMatrixTranspose(mWorld);
+	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
 
 	auto handle = mpSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	handle.ptr += mpDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);

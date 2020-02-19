@@ -9,7 +9,8 @@ struct Output
 };
 
 cbuffer cbuff0 {
-	matrix mat;
+	matrix world;
+	matrix viewproj;
 };
 
 Output BasicVS(
@@ -22,8 +23,9 @@ Output BasicVS(
 {
 	Output output;
 
-	output.svpos = mul(position, mat);
-	output.normal = normal;
+	output.svpos = mul(mul(position, world), viewproj);
+	normal.w = 0.0;
+	output.normal = mul(normal, world);
 	output.uv = uv;
 
 	return output;
@@ -31,5 +33,8 @@ Output BasicVS(
 
 float4 BasicPS(Output input) : SV_TARGET
 {
-	return float4(input.normal.xyz, 1.0);
+	float3 light = normalize(float3(1.0, -1.0, 1.0));
+	float brightness = dot(-light, input.normal);
+
+	return float4(brightness, brightness, brightness, 1.0);
 }
