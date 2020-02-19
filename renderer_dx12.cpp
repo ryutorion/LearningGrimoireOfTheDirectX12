@@ -67,6 +67,16 @@ bool RendererDX12::initialize(uint32_t width, uint32_t height, HWND hWnd)
 		return false;
 	}
 
+	if(!createDSVDescriptorHeap())
+	{
+		return false;
+	}
+
+	if(!createDSV())
+	{
+		return false;
+	}
+
 	if(!createFence())
 	{
 		return false;
@@ -146,11 +156,14 @@ bool RendererDX12::render()
 
 	auto rtv_handle = mpRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	rtv_handle.ptr += back_buffer_index * mRTVDescriptorSize;
-	mpGraphicsCommandList->OMSetRenderTargets(1, &rtv_handle, FALSE, nullptr);
+	auto dsv_handle = mpDSVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	mpGraphicsCommandList->OMSetRenderTargets(1, &rtv_handle, FALSE, &dsv_handle);
 
 	float clear_color[] { 1.0f, 1.0f, 1.0f, 1.0f };
 	mpGraphicsCommandList->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 	++frame;
+
+	mpGraphicsCommandList->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
 	mpGraphicsCommandList->RSSetViewports(1, &mViewport);
 	mpGraphicsCommandList->RSSetScissorRects(1, &mScissorRect);
@@ -380,6 +393,81 @@ bool RendererDX12::createRTVs()
 		);
 		handle.ptr += mRTVDescriptorSize;
 	}
+
+	return true;
+}
+
+bool RendererDX12::createDSVDescriptorHeap()
+{
+	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc;
+	descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+	descriptor_heap_desc.NumDescriptors = 1;
+	descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+	descriptor_heap_desc.NodeMask = 0;
+
+	HRESULT hr = mpDevice->CreateDescriptorHeap(
+		&descriptor_heap_desc,
+		IID_PPV_ARGS(&mpDSVDescriptorHeap)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool RendererDX12::createDSV()
+{
+	D3D12_HEAP_PROPERTIES heap_properties;
+	heap_properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+	heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+	heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+	heap_properties.CreationNodeMask = 0;
+	heap_properties.VisibleNodeMask = 0;
+
+
+	D3D12_RESOURCE_DESC resource_desc;
+	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	resource_desc.Alignment = 0;
+	resource_desc.Width = mWidth;
+	resource_desc.Height = mHeight;
+	resource_desc.DepthOrArraySize = 1;
+	resource_desc.MipLevels = 1;
+	resource_desc.Format = DXGI_FORMAT_D32_FLOAT;
+	resource_desc.SampleDesc.Count = 1;
+	resource_desc.SampleDesc.Quality = 0;
+	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	resource_desc.Flags= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+	D3D12_CLEAR_VALUE clear_value;
+	clear_value.Format = resource_desc.Format;
+	clear_value.DepthStencil.Depth = 1.0f;
+
+	HRESULT hr = mpDevice->CreateCommittedResource(
+		&heap_properties,
+		D3D12_HEAP_FLAG_NONE,
+		&resource_desc,
+		D3D12_RESOURCE_STATE_DEPTH_WRITE,
+		&clear_value,
+		IID_PPV_ARGS(&mpDepthBuffer)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	D3D12_DEPTH_STENCIL_VIEW_DESC depth_stencil_view_desc;
+	depth_stencil_view_desc.Format = resource_desc.Format;
+	depth_stencil_view_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	depth_stencil_view_desc.Flags = D3D12_DSV_FLAG_NONE;
+	depth_stencil_view_desc.Texture2D.MipSlice = 0;
+
+	mpDevice->CreateDepthStencilView(
+		mpDepthBuffer.Get(),
+		&depth_stencil_view_desc,
+		mpDSVDescriptorHeap->GetCPUDescriptorHandleForHeapStart()
+	);
 
 	return true;
 }
@@ -699,7 +787,7 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.RasterizerState.ForcedSampleCount = 0;
 	graphics_pipeline_state_desc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
-	graphics_pipeline_state_desc.DepthStencilState.DepthEnable = FALSE;
+	graphics_pipeline_state_desc.DepthStencilState.DepthEnable = TRUE;
 	graphics_pipeline_state_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
 	graphics_pipeline_state_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
 	graphics_pipeline_state_desc.DepthStencilState.StencilEnable = FALSE;
@@ -774,7 +862,7 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.RTVFormats[6] = DXGI_FORMAT_UNKNOWN;
 	graphics_pipeline_state_desc.RTVFormats[7] = DXGI_FORMAT_UNKNOWN;
 
-	graphics_pipeline_state_desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+	graphics_pipeline_state_desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
 
 	graphics_pipeline_state_desc.SampleDesc.Count = 1;
 	graphics_pipeline_state_desc.SampleDesc.Quality = 0;

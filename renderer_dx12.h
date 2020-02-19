@@ -26,6 +26,8 @@ private:
 	bool createSwapChain(HWND hWnd);
 	bool createRTVDescriptorHeap();
 	bool createRTVs();
+	bool createDSVDescriptorHeap();
+	bool createDSV();
 	bool createFence();
 	bool loadModel();
 	bool createVertexBuffer();
@@ -58,6 +60,9 @@ private:
 		Microsoft::WRL::ComPtr<ID3D12Resource>,
 		SwapChainBufferCount
 	> mpBackBuffers;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpDepthBuffer;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpDSVDescriptorHeap;
 
 	uint64_t mFenceValue = 0;
 	Microsoft::WRL::ComPtr<ID3D12Fence> mpFence;
