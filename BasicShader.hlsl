@@ -1,4 +1,5 @@
 Texture2D<float4> tex;
+Texture2D<float4> sph;
 SamplerState smp;
 
 struct Output
@@ -11,6 +12,12 @@ struct Output
 cbuffer cbuff0 {
 	matrix world;
 	matrix viewproj;
+};
+
+cbuffer Material {
+	float4 diffuse;
+	float4 specular;
+	float4 ambient;
 };
 
 Output BasicVS(
@@ -34,7 +41,9 @@ Output BasicVS(
 float4 BasicPS(Output input) : SV_TARGET
 {
 	float3 light = normalize(float3(1.0, -1.0, 1.0));
-	float brightness = dot(-light, input.normal);
+	float brightness = dot(-light, input.normal.xyz);
 
-	return float4(brightness, brightness, brightness, 1.0);
+	float2 normal_uv = (input.normal.xy + float2(1, -1)) * float2(0.5, -0.5);
+
+	return float4(brightness, brightness, brightness, 1.0) * diffuse * tex.Sample(smp, input.uv) * sph.Sample(smp, normal_uv);
 }

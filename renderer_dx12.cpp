@@ -1,6 +1,7 @@
 #include "renderer_dx12.h"
 #include <algorithm>
 #include <fstream>
+#include <regex>
 #include <d3dcompiler.h>
 #include <DirectXTex.h>
 #include <d3dx12.h>
@@ -82,6 +83,11 @@ bool RendererDX12::initialize(uint32_t width, uint32_t height, HWND hWnd)
 		return false;
 	}
 
+	if(!createNullWhite())
+	{
+		return false;
+	}
+
 	if(!loadModel())
 	{
 		return false;
@@ -119,12 +125,22 @@ bool RendererDX12::initialize(uint32_t width, uint32_t height, HWND hWnd)
 	mScissorRect.right = mWidth;
 	mScissorRect.bottom = mHeight;
 
-	if(!loadTexture())
+	if(!createSceneDescriptorHeap())
 	{
 		return false;
 	}
 
-	if(!createConstantBuffer())
+	if(!createSceneConstantBuffer())
+	{
+		return false;
+	}
+
+	if(!createMaterialDescriptorHeap())
+	{
+		return false;
+	}
+
+	if(!createMaterialResources())
 	{
 		return false;
 	}
@@ -137,11 +153,11 @@ bool RendererDX12::render()
 	static uint32_t frame = 0;
 	static float angle = 0.0f;
 
-	angle += 0.05f;
+	// angle += 0.05f;
 	mWorld = XMMatrixRotationY(angle);
 
-	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[0] = XMMatrixTranspose(mWorld);
-	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
+	reinterpret_cast<XMMATRIX *>(mpMappedSceneConstantBuffer)[0] = XMMatrixTranspose(mWorld);
+	reinterpret_cast<XMMATRIX *>(mpMappedSceneConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
 
 	auto back_buffer_index = mpSwapChain->GetCurrentBackBufferIndex();
 
@@ -169,18 +185,28 @@ bool RendererDX12::render()
 
 	mpGraphicsCommandList->RSSetViewports(1, &mViewport);
 	mpGraphicsCommandList->RSSetScissorRects(1, &mScissorRect);
-	mpGraphicsCommandList->SetDescriptorHeaps(1, mpSRVDescriptorHeap.GetAddressOf());
 	mpGraphicsCommandList->SetGraphicsRootSignature(mpRootSignature.Get());
-	mpGraphicsCommandList->SetDescriptorHeaps(1, mpSRVDescriptorHeap.GetAddressOf());
-	mpGraphicsCommandList->SetGraphicsRootDescriptorTable(0, mpSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 
 	mpGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	// mpGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
 	mpGraphicsCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
 	mpGraphicsCommandList->IASetIndexBuffer(&mIndexBufferView);
 
-	mpGraphicsCommandList->DrawIndexedInstanced(mIndices.size(), 1, 0, 0, 0);
-	// mpGraphicsCommandList->DrawInstanced(mVertices.size(), 1, 0, 0);
+	mpGraphicsCommandList->SetDescriptorHeaps(1, mpSceneDescriptorHeap.GetAddressOf());
+	mpGraphicsCommandList->SetGraphicsRootDescriptorTable(0, mpSceneDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+	mpGraphicsCommandList->SetDescriptorHeaps(1, mpMaterialDescriptorHeap.GetAddressOf());
+
+	auto material_handle = mpMaterialDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	auto material_handle_size = mpDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	uint32_t index_offset = 0;
+	for(auto & m : mMaterials)
+	{
+		mpGraphicsCommandList->SetGraphicsRootDescriptorTable(1, material_handle);
+		mpGraphicsCommandList->DrawIndexedInstanced(m.indicesCount, 1, index_offset, 0, 0);
+
+		material_handle.ptr += material_handle_size * 3;
+		index_offset += m.indicesCount;
+	}
 
 	mpGraphicsCommandList->ResourceBarrier(
 		1,
@@ -491,9 +517,89 @@ bool RendererDX12::createFence()
 	return true;
 }
 
+bool RendererDX12::loadTexture(
+	Material & material,
+	const filesystem::path & texture_path
+)
+{
+	TexMetadata meta_data;
+	ScratchImage scratch_image;
+
+	HRESULT hr = LoadFromWICFile(
+		texture_path.wstring().c_str(),
+		WIC_FLAGS_NONE,
+		&meta_data,
+		scratch_image
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	D3D12_HEAP_PROPERTIES heap_properties;
+	heap_properties.Type = D3D12_HEAP_TYPE_CUSTOM;
+	heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+	heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+	heap_properties.CreationNodeMask = 0;
+	heap_properties.VisibleNodeMask = 0;
+
+	D3D12_RESOURCE_DESC resource_desc;
+	resource_desc.Dimension = static_cast<D3D12_RESOURCE_DIMENSION>(meta_data.dimension);
+	resource_desc.Alignment = 0;
+	resource_desc.Width = meta_data.width;
+	resource_desc.Height = meta_data.height;
+	resource_desc.DepthOrArraySize = meta_data.arraySize;
+	resource_desc.MipLevels = meta_data.mipLevels;
+	resource_desc.Format = meta_data.format;
+	resource_desc.SampleDesc.Count = 1;
+	resource_desc.SampleDesc.Quality = 0;
+	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+	ComPtr<ID3D12Resource> p_texture;
+	hr = mpDevice->CreateCommittedResource(
+		&heap_properties,
+		D3D12_HEAP_FLAG_NONE,
+		&resource_desc,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&p_texture)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	auto p_image = scratch_image.GetImage(0, 0, 0);
+	hr = p_texture->WriteToSubresource(
+		0,
+		nullptr,
+		p_image->pixels,
+		p_image->rowPitch,
+		p_image->slicePitch
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	auto extension = texture_path.extension();
+	if(extension == ".bmp" || extension == ".png")
+	{
+		material.pTexture = p_texture;
+	}
+	else if(extension == ".sph")
+	{
+		material.pMultipleSphereMap = p_texture;
+	}
+
+	return true;
+}
+
 bool RendererDX12::loadModel()
 {
-	ifstream fin("model/miku.pmd", ios::in | ios::binary);
+	filesystem::path model_root = "model";
+	ifstream fin(model_root / "miku.metal.pmd", ios::in | ios::binary);
 	if(!fin)
 	{
 		return false;
@@ -516,22 +622,23 @@ bool RendererDX12::loadModel()
 		return false;
 	}
 
-	uint32_t vertex_count = 0;
-	fin.read(reinterpret_cast<char *>(&vertex_count), sizeof(vertex_count));
+	// 頂点の読み取り
+	{
+		uint32_t vertex_count = 0;
+		fin.read(reinterpret_cast<char *>(&vertex_count), sizeof(vertex_count));
 
 #include <pshpack2.h>
-	struct PMDVertex
-	{
-		XMFLOAT3 position;
-		XMFLOAT3 normal;
-		XMFLOAT2 uv;
-		uint16_t boneNo[2];
-		uint8_t boneWeight;
-		uint8_t edgeFlag;
-	};
+		struct PMDVertex
+		{
+			XMFLOAT3 position;
+			XMFLOAT3 normal;
+			XMFLOAT2 uv;
+			uint16_t boneNo[2];
+			uint8_t boneWeight;
+			uint8_t edgeFlag;
+		};
 #include <poppack.h>
 
-	{
 		vector<PMDVertex> vertices(vertex_count);
 		fin.read(reinterpret_cast<char *>(vertices.data()), sizeof(vertices[0]) * vertices.size());
 
@@ -551,11 +658,83 @@ bool RendererDX12::loadModel()
 		}
 	}
 
-	uint32_t index_count = 0;
-	fin.read(reinterpret_cast<char *>(&index_count), sizeof(index_count));
+	// インデックスの読み取り
+	{
+		uint32_t index_count = 0;
+		fin.read(reinterpret_cast<char *>(&index_count), sizeof(index_count));
 
-	mIndices.resize(index_count);
-	fin.read(reinterpret_cast<char *>(mIndices.data()), sizeof(mIndices[0]) * mIndices.size());
+		mIndices.resize(index_count);
+		fin.read(reinterpret_cast<char *>(mIndices.data()), sizeof(mIndices[0]) * mIndices.size());
+	}
+
+	// マテリアルの読み取り
+	{
+		uint32_t material_count = 0;
+		fin.read(reinterpret_cast<char *>(&material_count), sizeof(material_count));
+
+#include <pshpack1.h>
+		struct PMDMaterial
+		{
+			XMFLOAT3 diffuse;
+			float diffuseAlpha;
+			float specularity;
+			XMFLOAT3 specular;
+			XMFLOAT3 ambient;
+			unsigned char toonIndex;
+			unsigned char edgeFlag;
+			unsigned int indexCount;
+			char textureFilePath[20];
+		};
+#include <poppack.h>
+
+		vector<PMDMaterial> materials(material_count);
+		fin.read(reinterpret_cast<char *>(materials.data()), sizeof(materials[0]) * materials.size());
+
+		mMaterials.resize(material_count);
+		for(uint32_t i = 0; i < material_count; ++i)
+		{
+			auto & src = materials[i];
+			auto & dst = mMaterials[i];
+
+			dst.indicesCount = src.indexCount;
+
+			dst.contantBuffer.diffuse = XMVectorSet(
+				src.diffuse.x,
+				src.diffuse.y,
+				src.diffuse.z,
+				src.diffuseAlpha
+			);
+
+			dst.contantBuffer.specular = XMVectorSet(
+				src.specular.x,
+				src.specular.y,
+				src.specular.z,
+				src.specularity
+			);
+
+			dst.contantBuffer.ambient = XMVectorSet(
+				src.ambient.x,
+				src.ambient.y,
+				src.ambient.z,
+				0.0f
+			);
+
+			dst.pTexture = mpNullWhite;
+			dst.pMultipleSphereMap = mpNullWhite;
+
+			if(src.textureFilePath[0])
+			{
+				auto asterisk = find(begin(src.textureFilePath), end(src.textureFilePath), '*');
+				if(asterisk != end(src.textureFilePath))
+				{
+					*asterisk = '\0';
+					loadTexture(dst, model_root / (asterisk + 1));
+				}
+
+				loadTexture(dst, model_root / src.textureFilePath);
+			}
+		}
+	}
 
 	return true;
 }
@@ -623,8 +802,8 @@ bool RendererDX12::createIndexBuffer()
 
 bool RendererDX12::createRootSignature()
 {
-	D3D12_DESCRIPTOR_RANGE descriptor_ranges[2];
-	descriptor_ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	D3D12_DESCRIPTOR_RANGE descriptor_ranges[3];
+	descriptor_ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
 	descriptor_ranges[0].NumDescriptors = 1;
 	descriptor_ranges[0].BaseShaderRegister = 0;
 	descriptor_ranges[0].RegisterSpace = 0;
@@ -636,11 +815,22 @@ bool RendererDX12::createRootSignature()
 	descriptor_ranges[1].RegisterSpace = 0;
 	descriptor_ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-	D3D12_ROOT_PARAMETER root_parameters[1];
+	descriptor_ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	descriptor_ranges[2].NumDescriptors = 2;
+	descriptor_ranges[2].BaseShaderRegister = 0;
+	descriptor_ranges[2].RegisterSpace = 0;
+	descriptor_ranges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+	D3D12_ROOT_PARAMETER root_parameters[2];
 	root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	root_parameters[0].DescriptorTable.NumDescriptorRanges = _countof(descriptor_ranges);
+	root_parameters[0].DescriptorTable.NumDescriptorRanges = 1;
 	root_parameters[0].DescriptorTable.pDescriptorRanges = descriptor_ranges;
-	root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+	root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	root_parameters[1].DescriptorTable.NumDescriptorRanges = 2;
+	root_parameters[1].DescriptorTable.pDescriptorRanges = &descriptor_ranges[1];
+	root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
 	D3D12_STATIC_SAMPLER_DESC static_samplers[1];
 	static_samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -674,6 +864,7 @@ bool RendererDX12::createRootSignature()
 	);
 	if(FAILED(hr))
 	{
+		OutputDebugStringA(reinterpret_cast<LPCSTR>(p_error_blob->GetBufferPointer()));
 		return false;
 	}
 
@@ -764,7 +955,7 @@ bool RendererDX12::createGraphicsPipelineState()
 	graphics_pipeline_state_desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
 	// graphics_pipeline_state_desc.BlendState.AlphaToCoverageEnable = FALSE;
 	// graphics_pipeline_state_desc.BlendState.IndependentBlendEnable = FALSE;
-	graphics_pipeline_state_desc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+	graphics_pipeline_state_desc.BlendState.RenderTarget[0].BlendEnable = FALSE;
 	// graphics_pipeline_state_desc.BlendState.RenderTarget[0].LogicOpEnable = FALSE;
 	graphics_pipeline_state_desc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
 	graphics_pipeline_state_desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -886,95 +1077,27 @@ bool RendererDX12::createGraphicsPipelineState()
 	return true;
 }
 
-bool RendererDX12::loadTexture()
+bool RendererDX12::createSceneDescriptorHeap()
 {
-	TexMetadata meta_data;
-	ScratchImage scratch_image;
-
-	HRESULT hr = LoadFromWICFile(L"img/textest.png", WIC_FLAGS_NONE, &meta_data, scratch_image);
-	if(FAILED(hr))
-	{
-		return false;
-	}
-
-	auto image = scratch_image.GetImage(0, 0, 0);
-
-	D3D12_HEAP_PROPERTIES heap_properties;
-	heap_properties.Type = D3D12_HEAP_TYPE_CUSTOM;
-	heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
-	heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
-	heap_properties.CreationNodeMask = 0;
-	heap_properties.VisibleNodeMask = 0;
-
-	D3D12_RESOURCE_DESC resource_desc;
-	resource_desc.Dimension = static_cast<D3D12_RESOURCE_DIMENSION>(meta_data.dimension);
-	resource_desc.Alignment = 0;
-	resource_desc.Width = meta_data.width;
-	resource_desc.Height = meta_data.height;
-	resource_desc.DepthOrArraySize = meta_data.arraySize;
-	resource_desc.MipLevels = meta_data.mipLevels;
-	resource_desc.Format = meta_data.format;
-	resource_desc.SampleDesc.Count = 1;
-	resource_desc.SampleDesc.Quality = 0;
-	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-	hr = mpDevice->CreateCommittedResource(
-		&heap_properties,
-		D3D12_HEAP_FLAG_NONE,
-		&resource_desc,
-		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-		nullptr,
-		IID_PPV_ARGS(&mpTexture)
-	);
-	if(FAILED(hr))
-	{
-		return false;
-	}
-
-	hr = mpTexture->WriteToSubresource(
-		0,
-		nullptr,
-		image->pixels,
-		image->rowPitch,
-		image->slicePitch
-	);
-	if(FAILED(hr))
-	{
-		return false;
-	}
-
 	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc;
 	descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	descriptor_heap_desc.NumDescriptors = 2;
+	descriptor_heap_desc.NumDescriptors = 1;
 	descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	descriptor_heap_desc.NodeMask = 0;
 
-	hr = mpDevice->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&mpSRVDescriptorHeap));
+	HRESULT hr = mpDevice->CreateDescriptorHeap(
+		&descriptor_heap_desc,
+		IID_PPV_ARGS(&mpSceneDescriptorHeap)
+	);
 	if(FAILED(hr))
 	{
 		return false;
 	}
-
-	D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
-	srv_desc.Format = meta_data.format;
-	srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	srv_desc.Texture2D.MostDetailedMip = 0;
-	srv_desc.Texture2D.MipLevels = 1;
-	srv_desc.Texture2D.PlaneSlice = 0;
-	srv_desc.Texture2D.ResourceMinLODClamp = 0;
-
-	mpDevice->CreateShaderResourceView(
-		mpTexture.Get(),
-		&srv_desc,
-		mpSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart()
-	);
 
 	return true;
 }
 
-bool RendererDX12::createConstantBuffer()
+bool RendererDX12::createSceneConstantBuffer()
 {
 	mWorld = XMMatrixRotationY(XM_PIDIV4);
 
@@ -1000,30 +1123,159 @@ bool RendererDX12::createConstantBuffer()
 		&CD3DX12_RESOURCE_DESC::Buffer((sizeof(XMMATRIX) * 2 + 0xff) & ~0xff),
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
-		IID_PPV_ARGS(&mpConstantBuffer)
+		IID_PPV_ARGS(&mpSceneConstantBuffer)
 	);
 	if(FAILED(hr))
 	{
 		return false;
 	}
 
-	hr = mpConstantBuffer->Map(0, nullptr, &mpMappedConstantBuffer);
+	hr = mpSceneConstantBuffer->Map(0, nullptr, &mpMappedSceneConstantBuffer);
 	if(FAILED(hr))
 	{
 		return false;
 	}
 
-	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[0] = XMMatrixTranspose(mWorld);
-	reinterpret_cast<XMMATRIX *>(mpMappedConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
+	reinterpret_cast<XMMATRIX *>(mpMappedSceneConstantBuffer)[0] = XMMatrixTranspose(mWorld);
+	reinterpret_cast<XMMATRIX *>(mpMappedSceneConstantBuffer)[1] = XMMatrixTranspose(mView * mProjection);
 
-	auto handle = mpSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	handle.ptr += mpDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	auto handle = mpSceneDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 
 	D3D12_CONSTANT_BUFFER_VIEW_DESC constant_buffer_view_desc;
-	constant_buffer_view_desc.BufferLocation = mpConstantBuffer->GetGPUVirtualAddress();
-	constant_buffer_view_desc.SizeInBytes = mpConstantBuffer->GetDesc().Width;
+	constant_buffer_view_desc.BufferLocation = mpSceneConstantBuffer->GetGPUVirtualAddress();
+	constant_buffer_view_desc.SizeInBytes = mpSceneConstantBuffer->GetDesc().Width;
 
 	mpDevice->CreateConstantBufferView(&constant_buffer_view_desc, handle);
+
+	return true;
+}
+
+bool RendererDX12::createNullWhite()
+{
+	D3D12_HEAP_PROPERTIES heap_properties;
+	heap_properties.Type = D3D12_HEAP_TYPE_CUSTOM;
+	heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+	heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+	heap_properties.CreationNodeMask = 0;
+	heap_properties.VisibleNodeMask = 0;
+
+	D3D12_RESOURCE_DESC resource_desc;
+	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	resource_desc.Alignment = 0;
+	resource_desc.Width = 4;
+	resource_desc.Height = 4;
+	resource_desc.DepthOrArraySize = 1;
+	resource_desc.MipLevels = 1;
+	resource_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	resource_desc.SampleDesc.Count = 1;
+	resource_desc.SampleDesc.Quality = 0;
+	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+	HRESULT hr = mpDevice->CreateCommittedResource(
+		&heap_properties,
+		D3D12_HEAP_FLAG_NONE,
+		&resource_desc,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		nullptr,
+		IID_PPV_ARGS(&mpNullWhite)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	std::array<uint8_t, 4 * 4 * 4> buffer;
+	buffer.fill(0xff);
+
+	hr = mpNullWhite->WriteToSubresource(0, nullptr, buffer.data(), 4 * 4, buffer.size());
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool RendererDX12::createMaterialDescriptorHeap()
+{
+	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc;
+	descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	descriptor_heap_desc.NumDescriptors = mMaterials.size() * 3;
+	descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	descriptor_heap_desc.NodeMask = 0;
+
+	HRESULT hr = mpDevice->CreateDescriptorHeap(
+		&descriptor_heap_desc,
+		IID_PPV_ARGS(&mpMaterialDescriptorHeap)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool RendererDX12::createMaterialResources()
+{
+	auto material_buffer_size = (sizeof(MaterialConstantBuffer) + 0xff) & ~0xff;
+	HRESULT hr = mpDevice->CreateCommittedResource(
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		D3D12_HEAP_FLAG_NONE,
+		&CD3DX12_RESOURCE_DESC::Buffer(material_buffer_size * mMaterials.size()),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&mpMaterialConstantBuffer)
+	);
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	uint8_t * p_dst = nullptr;
+	hr = mpMaterialConstantBuffer->Map(0, nullptr, reinterpret_cast<void **>(&p_dst));
+	if(FAILED(hr))
+	{
+		return false;
+	}
+
+	auto handle = mpMaterialDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	auto handle_size = mpDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+	D3D12_CONSTANT_BUFFER_VIEW_DESC constant_buffer_view_desc;
+	constant_buffer_view_desc.BufferLocation = mpMaterialConstantBuffer->GetGPUVirtualAddress();
+	constant_buffer_view_desc.SizeInBytes = material_buffer_size;
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC shader_resource_view_desc;
+	shader_resource_view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	shader_resource_view_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	shader_resource_view_desc.Texture2D.MostDetailedMip = 0;
+	shader_resource_view_desc.Texture2D.MipLevels = 1;
+	shader_resource_view_desc.Texture2D.PlaneSlice = 0;
+	shader_resource_view_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+	for(auto & m : mMaterials)
+	{
+		*reinterpret_cast<MaterialConstantBuffer *>(p_dst) = m.contantBuffer;
+		p_dst += material_buffer_size;
+
+		mpDevice->CreateConstantBufferView(&constant_buffer_view_desc, handle);
+		constant_buffer_view_desc.BufferLocation += material_buffer_size;
+		handle.ptr += handle_size;
+
+		shader_resource_view_desc.Format = m.pTexture->GetDesc().Format;
+		mpDevice->CreateShaderResourceView(m.pTexture.Get(), &shader_resource_view_desc, handle);
+
+		handle.ptr += handle_size;
+
+		shader_resource_view_desc.Format = m.pMultipleSphereMap->GetDesc().Format;
+		mpDevice->CreateShaderResourceView(m.pMultipleSphereMap.Get(), &shader_resource_view_desc, handle);
+
+		handle.ptr += handle_size;
+	}
+
+	mpMaterialConstantBuffer->Unmap(0, nullptr);
 
 	return true;
 }
