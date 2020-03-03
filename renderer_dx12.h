@@ -157,7 +157,6 @@ private:
 
 	struct SceneData
 	{
-		DirectX::XMMATRIX world;
 		DirectX::XMMATRIX view;
 		DirectX::XMMATRIX projection;
 		DirectX::XMVECTOR eye;

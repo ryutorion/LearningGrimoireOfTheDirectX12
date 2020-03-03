@@ -39,6 +39,12 @@ void PMDActor::draw(RendererDX12 & renderer)
 	renderer.setVertexBuffers(0, 1, &mVertexBufferView);
 	renderer.setIndexBuffer(mIndexBufferView);
 
+	renderer.setDescriptorHeap(mpTransformDescriptorHeap);
+	renderer.setGraphicsRootDescriptorTable(
+		1,
+		mpTransformDescriptorHeap->GetGPUDescriptorHandleForHeapStart()
+	);
+
 	renderer.setDescriptorHeap(mpMaterialDescriptorHeap);
 
 	auto material_handle = mpMaterialDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
@@ -46,7 +52,7 @@ void PMDActor::draw(RendererDX12 & renderer)
 	uint32_t index_offset = 0;
 	for(auto & m : mMaterials)
 	{
-		renderer.setGraphicsRootDescriptorTable(1, material_handle);
+		renderer.setGraphicsRootDescriptorTable(2, material_handle);
 		renderer.drawIndexedInstanced(m.indexCount, 1, index_offset, 0, 0);
 
 		material_handle.ptr += material_handle_size * 5;
@@ -89,6 +95,12 @@ bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 	}
 
 	*mpMappedTransform = XMMatrixIdentity();
+
+	renderer.createConstantBufferView(
+		mpTransformConstantBuffer->GetGPUVirtualAddress(),
+		buffer_size,
+		mpTransformDescriptorHeap->GetCPUDescriptorHandleForHeapStart()
+	);
 
 	return true;
 }

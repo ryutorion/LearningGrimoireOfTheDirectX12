@@ -15,14 +15,20 @@ struct Output
 	float3 ray : VECTOR;
 };
 
-cbuffer SceneData {
-	matrix world;
+cbuffer SceneData
+{
 	matrix view;
 	matrix proj;
 	float4 eye;
 };
 
-cbuffer Material {
+cbuffer Transform
+{
+	matrix world;
+};
+
+cbuffer Material
+{
 	float4 diffuse;
 	float4 specular;
 	float4 ambient;

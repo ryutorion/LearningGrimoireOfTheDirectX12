@@ -142,8 +142,6 @@ bool RendererDX12::render()
 {
 	static float angle = 0.0f;
 
-	mSceneData.world = XMMatrixTranspose(XMMatrixRotationY(angle));
-
 	*reinterpret_cast<SceneData *>(mpMappedSceneConstantBuffer) = mSceneData;
 
 	beginDraw();
@@ -743,70 +741,46 @@ bool RendererDX12::loadModel()
 
 bool RendererDX12::createRootSignature()
 {
-	D3D12_DESCRIPTOR_RANGE descriptor_ranges[3];
-	descriptor_ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-	descriptor_ranges[0].NumDescriptors = 1;
-	descriptor_ranges[0].BaseShaderRegister = 0;
-	descriptor_ranges[0].RegisterSpace = 0;
-	descriptor_ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+	CD3DX12_DESCRIPTOR_RANGE descriptor_ranges[4];
+	descriptor_ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+	descriptor_ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1);
+	descriptor_ranges[2].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+	descriptor_ranges[3].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
 
-	descriptor_ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-	descriptor_ranges[1].NumDescriptors = 1;
-	descriptor_ranges[1].BaseShaderRegister = 0;
-	descriptor_ranges[1].RegisterSpace = 0;
-	descriptor_ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+	CD3DX12_ROOT_PARAMETER root_parameters[3];
+	root_parameters[0].InitAsDescriptorTable(
+		1,
+		&descriptor_ranges[0],
+		D3D12_SHADER_VISIBILITY_VERTEX
+	);
+	root_parameters[1].InitAsDescriptorTable(
+		1,
+		&descriptor_ranges[1],
+		D3D12_SHADER_VISIBILITY_VERTEX
+	);
+	root_parameters[2].InitAsDescriptorTable(
+		2,
+		&descriptor_ranges[2],
+		D3D12_SHADER_VISIBILITY_PIXEL
+	);
 
-	descriptor_ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	descriptor_ranges[2].NumDescriptors = 4;
-	descriptor_ranges[2].BaseShaderRegister = 0;
-	descriptor_ranges[2].RegisterSpace = 0;
-	descriptor_ranges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+	CD3DX12_STATIC_SAMPLER_DESC static_sampler_descs[2];
+	static_sampler_descs[0].Init(0);
+	static_sampler_descs[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-	D3D12_ROOT_PARAMETER root_parameters[2];
-	root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	root_parameters[0].DescriptorTable.NumDescriptorRanges = 1;
-	root_parameters[0].DescriptorTable.pDescriptorRanges = descriptor_ranges;
-	root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-
-	root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	root_parameters[1].DescriptorTable.NumDescriptorRanges = 2;
-	root_parameters[1].DescriptorTable.pDescriptorRanges = &descriptor_ranges[1];
-	root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-	D3D12_STATIC_SAMPLER_DESC static_samplers[2];
-	static_samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-	static_samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	static_samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	static_samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	static_samplers[0].MipLODBias = 0.0f;
-	static_samplers[0].MaxAnisotropy = 0;
-	static_samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-	static_samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
-	static_samplers[0].MinLOD = 0.0f;
-	static_samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
-	static_samplers[0].ShaderRegister = 0;
-	static_samplers[0].RegisterSpace = 0;
-	static_samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-	static_samplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-	static_samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-	static_samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-	static_samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-	static_samplers[1].MipLODBias = 0.0f;
-	static_samplers[1].MaxAnisotropy = 0;
-	static_samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-	static_samplers[1].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
-	static_samplers[1].MinLOD = 0.0f;
-	static_samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
-	static_samplers[1].ShaderRegister = 1;
-	static_samplers[1].RegisterSpace = 0;
-	static_samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	static_sampler_descs[1].Init(
+		1,
+		D3D12_FILTER_ANISOTROPIC,
+		D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+		D3D12_TEXTURE_ADDRESS_MODE_CLAMP
+	);
+	static_sampler_descs[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
 	D3D12_ROOT_SIGNATURE_DESC root_signature_desc;
 	root_signature_desc.NumParameters = _countof(root_parameters);
 	root_signature_desc.pParameters = root_parameters;
-	root_signature_desc.NumStaticSamplers = _countof(static_samplers);
-	root_signature_desc.pStaticSamplers = static_samplers;
+	root_signature_desc.NumStaticSamplers = _countof(static_sampler_descs);
+	root_signature_desc.pStaticSamplers = static_sampler_descs;
 	root_signature_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ComPtr<ID3DBlob> p_root_signature_blob;
@@ -1049,8 +1023,6 @@ bool RendererDX12::createSceneDescriptorHeap()
 
 bool RendererDX12::createSceneConstantBuffer()
 {
-	mSceneData.world = XMMatrixTranspose(XMMatrixRotationY(XM_PIDIV4));
-
 	XMFLOAT3 eye(0.0f, 16.0f, -6.0f);
 	XMFLOAT3 at(0.0f, 16.0f, 0.0f);
 	XMFLOAT3 up(0.0f, 1.0f, 0.0f);
