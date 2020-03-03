@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <Windows.h>
+#include "application.h"
 #include "renderer_dx12.h"
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -13,8 +14,7 @@ int WINAPI WinMain(
 {
 	SetCurrentDirectory(WORKING_DIR);
 
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	if(FAILED(hr))
+	if(!application::initialize())
 	{
 		return 0;
 	}
@@ -102,6 +102,8 @@ int WINAPI WinMain(
 
 		renderer.render();
 	}
+
+	application::finalize();
 
 	return static_cast<int>(msg.wParam);
 }
