@@ -1,6 +1,7 @@
 ﻿#include "pmd_actor.h"
 #include "renderer_dx12.h"
 #include <d3dx12.h>
+#include "pmd.h"
 
 using namespace std;
 using namespace DirectX;
@@ -183,15 +184,7 @@ bool PMDActor::loadVertices(std::ifstream & fin, RendererDX12 & renderer)
 		sizeof(pmd_vertices[0]) * pmd_vertices.size()
 	);
 
-	struct Vertex
-	{
-		XMVECTOR position;
-		XMVECTOR normal;
-		XMFLOAT2 uv;
-		uint16_t bones[2];
-		uint8_t weight;
-		uint8_t edge;
-	};
+	using Vertex = pmd::Vertex;
 
 	vector<Vertex> vertices(vertex_count);
 	for(uint32_t i = 0; i < vertex_count; ++i)

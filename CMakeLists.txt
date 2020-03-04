@@ -43,8 +43,11 @@ add_executable(
 	renderer_dx12.cpp
 	application.h
 	application.cpp
+	pmd.h
 	pmd_actor.h
 	pmd_actor.cpp
+	pmd_renderer.h
+	pmd_renderer.cpp
 )
 
 target_include_directories(

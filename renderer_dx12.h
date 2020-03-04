@@ -13,6 +13,7 @@
 #include <DirectXMath.h>
 #include <wrl/client.h>
 #include "pmd_actor.h"
+#include "pmd_renderer.h"
 
 class RendererDX12
 {
@@ -21,6 +22,24 @@ public:
 
 	bool initialize(uint32_t width, uint32_t height, HWND hWnd);
 	bool render();
+
+	bool createRootSignature(
+		Microsoft::WRL::ComPtr<ID3D12RootSignature> & p_root_signature,
+		const void *p_blob_with_root_signature,
+		size_t blob_length_in_bytes
+	);
+
+	static bool loadShader(
+		LPCWSTR path,
+		const char * entry_point,
+		const char * target,
+		Microsoft::WRL::ComPtr<ID3DBlob> & p_shader_blob
+	);
+
+	bool createGraphicsPipelineState(
+		Microsoft::WRL::ComPtr<ID3D12PipelineState> & p_graphics_pipeline_state,
+		const D3D12_GRAPHICS_PIPELINE_STATE_DESC & graphics_pipeline_state_desc
+	);
 
 	bool createDescriptorHeap(
 		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> & p_descriptor_heap,
@@ -51,17 +70,28 @@ public:
 	uint32_t getDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type);
 
 	void beginDraw();
+
+	void setPipelineState(Microsoft::WRL::ComPtr<ID3D12PipelineState> & p_pipeline_state);
+
+	void setGraphicsRootSignature(Microsoft::WRL::ComPtr<ID3D12RootSignature> & p_graphics_root_signature);
+
+	void setScene();
+
 	void setVertexBuffers(
 		const uint32_t start_slot,
 		const uint32_t view_count,
 		const D3D12_VERTEX_BUFFER_VIEW * p_view_array
 	);
+
 	void setIndexBuffer(const D3D12_INDEX_BUFFER_VIEW & index_buffer_view);
+
 	void setDescriptorHeap(Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> & p_descriptor_heap);
+
 	void setGraphicsRootDescriptorTable(
 		const uint32_t root_parameter_index,
 		D3D12_GPU_DESCRIPTOR_HANDLE base_descriptor
 	);
+
 	void drawIndexedInstanced(
 		uint32_t index_count_per_instance,
 		uint32_t instance_count,
@@ -69,6 +99,7 @@ public:
 		int32_t base_vertex_location,
 		uint32_t start_instance_location
 	);
+
 	void endDraw();
 
 	const Microsoft::WRL::ComPtr<ID3D12Resource> & getNullWhite() const { return mpNullWhite; }
@@ -98,8 +129,6 @@ private:
 	bool createNullGradation();
 
 	bool loadModel();
-	bool createRootSignature();
-	bool createGraphicsPipelineState();
 	bool createSceneDescriptorHeap();
 	bool createSceneConstantBuffer();
 private:
@@ -134,16 +163,6 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Fence> mpFence;
 	HANDLE mhFenceEvent = nullptr;
 
-	struct Vertex
-	{
-		DirectX::XMVECTOR position;
-		DirectX::XMVECTOR normal;
-		DirectX::XMFLOAT2 uv;
-		uint16_t bones[2];
-		uint8_t weight;
-		uint8_t edge;
-	};
-
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> mpRootSignature;
 
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> mpGraphicsPipelineState;
@@ -167,12 +186,14 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpNullBlack;
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpNullGradation;
 
+	std::unique_ptr<PMDRenderer> mpPMDRenderer;
 	std::unique_ptr<PMDActor> mpPMDActor;
 
 	std::map<
 		std::filesystem::path,
 		Microsoft::WRL::ComPtr<ID3D12Resource>
 	> mTextureCache;
+
 };
 
 #endif // RENDERER_DX12_H_INCLUDED
