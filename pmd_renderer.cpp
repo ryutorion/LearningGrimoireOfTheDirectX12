@@ -207,7 +207,7 @@ bool PMDRenderer::createGraphicsPipelineState(RendererDX12 & renderer)
 
 	input_element_descs[4].SemanticName = "WEIGHT";
 	input_element_descs[4].SemanticIndex = 0;
-	input_element_descs[4].Format = DXGI_FORMAT_R8G8_UINT;
+	input_element_descs[4].Format = DXGI_FORMAT_R8_UINT;
 	input_element_descs[4].InputSlot = 0;
 	input_element_descs[4].AlignedByteOffset = offsetof(Vertex, weight);
 	input_element_descs[4].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;

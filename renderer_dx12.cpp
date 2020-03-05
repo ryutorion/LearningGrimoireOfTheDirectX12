@@ -769,7 +769,7 @@ void RendererDX12::drawIndexedInstanced(
 
 bool RendererDX12::loadModel()
 {
-	mpPMDActor.reset(new PMDActor("model/miku.metal.pmd", *this));
+	mpPMDActor.reset(new PMDActor("model/miku.pmd", *this));
 
 	return true;
 }
@@ -843,8 +843,8 @@ bool RendererDX12::createSceneDescriptorHeap()
 
 bool RendererDX12::createSceneConstantBuffer()
 {
-	XMFLOAT3 eye(0.0f, 16.0f, -6.0f);
-	XMFLOAT3 at(0.0f, 16.0f, 0.0f);
+	XMFLOAT3 eye(0.0f, 15.0f, -15.0f);
+	XMFLOAT3 at(0.0f, 10.0f, 0.0f);
 	XMFLOAT3 up(0.0f, 1.0f, 0.0f);
 	mSceneData.view = XMMatrixLookAtLH(
 		XMLoadFloat3(&eye),

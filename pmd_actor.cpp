@@ -1,7 +1,8 @@
 ﻿#include "pmd_actor.h"
 #include "renderer_dx12.h"
-#include <d3dx12.h>
 #include "pmd.h"
+#include <algorithm>
+#include <d3dx12.h>
 
 using namespace std;
 using namespace DirectX;
@@ -9,17 +10,17 @@ using namespace Microsoft::WRL;
 
 PMDActor::PMDActor(const char * pathStr, RendererDX12 & renderer)
 {
+	if(!load(pathStr, renderer))
+	{
+		return ;
+	}
+
 	if(!createTransformDescriptorHeap(renderer))
 	{
 		return ;
 	}
 
 	if(!createTransformConstantBuffer(renderer))
-	{
-		return ;
-	}
-
-	if(!load(pathStr, renderer))
 	{
 		return ;
 	}
@@ -79,7 +80,7 @@ bool PMDActor::createTransformDescriptorHeap(RendererDX12 & renderer)
 
 bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 {
-	auto buffer_size = (sizeof(XMMATRIX) + 0xff) & ~0xff;
+	auto buffer_size = (sizeof(XMMATRIX) * (1 + mBoneMatrices.size()) + 0xff) & ~0xff;
 	if(!renderer.createBuffer(mpTransformConstantBuffer, buffer_size))
 	{
 		return false;
@@ -95,7 +96,25 @@ bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 		return false;
 	}
 
+	const auto & left_arm_bone = mNameToBoneMap["左腕"];
+	const auto & left_arm_position = left_arm_bone.startPosition;
+	mBoneMatrices[left_arm_bone.boneIndex] = 
+		XMMatrixTranslation(-left_arm_position.x, -left_arm_position.y, -left_arm_position.z) *
+		XMMatrixRotationZ(XM_PIDIV2) *
+		XMMatrixTranslation(left_arm_position.x, left_arm_position.y, left_arm_position.z);
+
+	const auto & left_elbow_bone = mNameToBoneMap["左ひじ"];
+	const auto & left_elbow_position = left_elbow_bone.startPosition;
+	mBoneMatrices[left_elbow_bone.boneIndex] = 
+		XMMatrixTranslation(-left_elbow_position.x, -left_elbow_position.y, -left_elbow_position.z) *
+		XMMatrixRotationZ(-XM_PIDIV2) *
+		XMMatrixTranslation(left_elbow_position.x, left_elbow_position.y, left_elbow_position.z);
+
+	const auto & center_bone = mNameToBoneMap["センター"];
+	multiplyMatrixRecursively(center_bone, XMMatrixIdentity());
+
 	*mpMappedTransform = XMMatrixIdentity();
+	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
 
 	renderer.createConstantBufferView(
 		mpTransformConstantBuffer->GetGPUVirtualAddress(),
@@ -131,6 +150,11 @@ bool PMDActor::load(const char * pathStr, RendererDX12 & renderer)
 	}
 
 	if(!loadMaterials(fin, renderer, root_path))
+	{
+		return false;
+	}
+
+	if(!loadBones(fin, renderer))
 	{
 		return false;
 	}
@@ -379,6 +403,54 @@ bool PMDActor::loadMaterials(
 	return true;
 }
 
+bool PMDActor::loadBones(std::ifstream & fin, RendererDX12 & renderer)
+{
+	uint16_t bone_count = 0;
+	fin.read(reinterpret_cast<char *>(&bone_count), sizeof(bone_count));
+
+#pragma pack(push, 1)
+	struct PMDBone
+	{
+		char boneName[20];
+		uint16_t parentNo;
+		uint16_t nextNo;
+		uint8_t type;
+		uint16_t ikBoneNo;
+		XMFLOAT3 pos;
+	};
+#pragma pack(pop)
+
+	vector<PMDBone> pmd_bones(bone_count);
+	fin.read(reinterpret_cast<char *>(pmd_bones.data()), sizeof(pmd_bones[0]) * pmd_bones.size());
+
+	vector<string> bone_names(bone_count);
+	for(size_t i = 0; i < pmd_bones.size(); ++i)
+	{
+		auto & pmd_bone = pmd_bones[i];
+		bone_names[i] = pmd_bone.boneName;
+
+		auto & bone = mNameToBoneMap[pmd_bone.boneName];
+		bone.boneIndex = i;
+		bone.startPosition = pmd_bone.pos;
+	}
+
+	for(auto & pmd_bone : pmd_bones)
+	{
+		if(pmd_bone.parentNo >= pmd_bones.size())
+		{
+			continue;
+		}
+
+		auto parent_name = bone_names[pmd_bone.parentNo];
+		mNameToBoneMap[parent_name].children.emplace_back(&mNameToBoneMap[pmd_bone.boneName]);
+	}
+
+	mBoneMatrices.resize(bone_count);
+	fill(mBoneMatrices.begin(), mBoneMatrices.end(), XMMatrixIdentity());
+
+	return true;
+}
+
 bool PMDActor::createMaterialDescriptorHeap(RendererDX12 & renderer)
 {
 	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc;
@@ -446,4 +518,18 @@ bool PMDActor::createMaterialResourceViews(RendererDX12 & renderer)
 	mpMaterialConstantBuffer->Unmap(0, nullptr);
 
 	return true;
+}
+
+void PMDActor::multiplyMatrixRecursively(
+	const BoneNode & bone,
+	const DirectX::XMMATRIX & parent_matrix
+)
+{
+	auto & local_matrix = mBoneMatrices[bone.boneIndex];
+	local_matrix *= parent_matrix;
+
+	for(const auto & child : bone.children)
+	{
+		multiplyMatrixRecursively(*child, local_matrix);
+	}
 }

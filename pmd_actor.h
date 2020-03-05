@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <string>
 #include <vector>
 #include <d3d12.h>
 #include <DirectXMath.h>
@@ -40,8 +42,13 @@ private:
 		const std::filesystem::path & root_path
 	);
 
+	bool loadBones(std::ifstream & fin, RendererDX12 & renderer);
+
 	bool createMaterialDescriptorHeap(RendererDX12 & renderer);
 	bool createMaterialResourceViews(RendererDX12 & renderer);
+
+	struct BoneNode;
+	void multiplyMatrixRecursively(const BoneNode & bone, const DirectX::XMMATRIX & parent_matrix);
 
 private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpVertexBuffer;
@@ -72,6 +79,16 @@ private:
 	};
 
 	std::vector<Material> mMaterials;
+
+	std::vector<DirectX::XMMATRIX> mBoneMatrices;
+
+	struct BoneNode
+	{
+		int32_t boneIndex;
+		DirectX::XMFLOAT3 startPosition;
+		std::vector<BoneNode *> children;
+	};
+	std::map<std::string, BoneNode> mNameToBoneMap;
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpMaterialDescriptorHeap;
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpMaterialConstantBuffer;

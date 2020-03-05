@@ -25,6 +25,7 @@ cbuffer SceneData
 cbuffer Transform
 {
 	matrix world;
+	matrix bones[256];
 };
 
 cbuffer Material
@@ -38,12 +39,16 @@ Output BasicVS(
 	float4 position : POSITION,
 	float4 normal : NORMAL,
 	float2 uv : TEXCOORD,
-	min16uint2 bones : BONES,
+	min16uint2 bone_no : BONES,
 	min16uint weight : WEIGHT
 )
 {
 	Output output;
 
+	float w = weight / 100.0f;
+	float4x4 m = bones[bone_no[0]] * w + bones[bone_no[1]] * (1 - w);
+
+	position = mul(m, position);
 	position = mul(position, world);
 	output.svpos = mul(mul(position, view), proj);
 	output.pos = mul(position, view);
