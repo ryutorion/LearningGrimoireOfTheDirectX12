@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <d3d12.h>
@@ -17,7 +18,9 @@ class RendererDX12;
 class PMDActor
 {
 public:
-	PMDActor(const char * pathStr, RendererDX12 & renderer);
+	PMDActor(const char * path_str, RendererDX12 & renderer);
+
+	bool loadVMD(const char * path_str);
 
 	void draw(RendererDX12 & renderer);
 
@@ -49,6 +52,8 @@ private:
 
 	struct BoneNode;
 	void multiplyMatrixRecursively(const BoneNode & bone, const DirectX::XMMATRIX & parent_matrix);
+
+	void updateMotion();
 
 private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpVertexBuffer;
@@ -92,6 +97,19 @@ private:
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpMaterialDescriptorHeap;
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpMaterialConstantBuffer;
+
+	struct KeyFrame
+	{
+		uint32_t frameNo;
+		DirectX::XMVECTOR quaternion;
+
+		KeyFrame(const uint32_t frame_no, const DirectX::XMVECTOR & q)
+			: frameNo(frame_no)
+			, quaternion(q)
+		{}
+	};
+
+	std::unordered_map<std::string, std::vector<KeyFrame>> mNameToKeyFrameMap;
 };
 
 #endif // PMD_ACTOR_H_INCLUDED

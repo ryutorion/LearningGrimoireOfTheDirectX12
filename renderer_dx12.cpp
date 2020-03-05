@@ -770,6 +770,7 @@ void RendererDX12::drawIndexedInstanced(
 bool RendererDX12::loadModel()
 {
 	mpPMDActor.reset(new PMDActor("model/miku.pmd", *this));
+	mpPMDActor->loadVMD("motion/pose.vmd");
 
 	return true;
 }

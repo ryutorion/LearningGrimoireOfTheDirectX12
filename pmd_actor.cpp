@@ -8,9 +8,9 @@ using namespace std;
 using namespace DirectX;
 using namespace Microsoft::WRL;
 
-PMDActor::PMDActor(const char * pathStr, RendererDX12 & renderer)
+PMDActor::PMDActor(const char * path_str, RendererDX12 & renderer)
 {
-	if(!load(pathStr, renderer))
+	if(!load(path_str, renderer))
 	{
 		return ;
 	}
@@ -34,6 +34,49 @@ PMDActor::PMDActor(const char * pathStr, RendererDX12 & renderer)
 	{
 		return ;
 	}
+}
+
+bool PMDActor::loadVMD(const char * path_str)
+{
+	ifstream fin(path_str, ios::in | ios::binary);
+	if(!fin)
+	{
+		return false;
+	}
+
+	// ヘッダをスキップ
+	fin.seekg(50, ios::beg);
+
+	uint32_t key_frame_count = 0;
+	fin.read(reinterpret_cast<char *>(&key_frame_count), sizeof(key_frame_count));
+
+#pragma pack(push, 1)
+	struct VMDKeyFrame
+	{
+		char boneName[15];
+		uint32_t frameNo;
+		XMFLOAT3 location;
+		XMFLOAT4 quaternion;
+		uint8_t bezier[64];
+	};
+#pragma pack(pop)
+	vector<VMDKeyFrame> vmd_key_frames(key_frame_count);
+	fin.read(
+		reinterpret_cast<char *>(vmd_key_frames.data()),
+		sizeof(vmd_key_frames[0]) * vmd_key_frames.size()
+	);
+
+	for(auto & vmd_key_frame : vmd_key_frames)
+	{
+		mNameToKeyFrameMap[vmd_key_frame.boneName].emplace_back(
+			vmd_key_frame.frameNo,
+			XMLoadFloat4(&vmd_key_frame.quaternion)
+		);
+	}
+
+	updateMotion();
+
+	return true;
 }
 
 void PMDActor::draw(RendererDX12 & renderer)
@@ -96,22 +139,17 @@ bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 		return false;
 	}
 
-	const auto & left_arm_bone = mNameToBoneMap["左腕"];
-	const auto & left_arm_position = left_arm_bone.startPosition;
-	mBoneMatrices[left_arm_bone.boneIndex] = 
-		XMMatrixTranslation(-left_arm_position.x, -left_arm_position.y, -left_arm_position.z) *
-		XMMatrixRotationZ(XM_PIDIV2) *
-		XMMatrixTranslation(left_arm_position.x, left_arm_position.y, left_arm_position.z);
+	for(auto & kv : mNameToKeyFrameMap)
+	{
+		auto & bone = mNameToBoneMap[kv.first];
+		auto & bone_position = bone.startPosition;
+		mBoneMatrices[bone.boneIndex] =
+			XMMatrixTranslation(-bone_position.x, -bone_position.y, -bone_position.z) *
+			XMMatrixRotationQuaternion(kv.second[0].quaternion) *
+			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z);
+	}
 
-	const auto & left_elbow_bone = mNameToBoneMap["左ひじ"];
-	const auto & left_elbow_position = left_elbow_bone.startPosition;
-	mBoneMatrices[left_elbow_bone.boneIndex] = 
-		XMMatrixTranslation(-left_elbow_position.x, -left_elbow_position.y, -left_elbow_position.z) *
-		XMMatrixRotationZ(-XM_PIDIV2) *
-		XMMatrixTranslation(left_elbow_position.x, left_elbow_position.y, left_elbow_position.z);
-
-	const auto & center_bone = mNameToBoneMap["センター"];
-	multiplyMatrixRecursively(center_bone, XMMatrixIdentity());
+	multiplyMatrixRecursively(mNameToBoneMap["センター"], XMMatrixIdentity());
 
 	*mpMappedTransform = XMMatrixIdentity();
 	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
@@ -532,4 +570,21 @@ void PMDActor::multiplyMatrixRecursively(
 	{
 		multiplyMatrixRecursively(*child, local_matrix);
 	}
+}
+
+void PMDActor::updateMotion()
+{
+	for(auto & kv : mNameToKeyFrameMap)
+	{
+		auto & bone = mNameToBoneMap[kv.first];
+		auto & bone_position = bone.startPosition;
+		mBoneMatrices[bone.boneIndex] =
+			XMMatrixTranslation(-bone_position.x, -bone_position.y, -bone_position.z) *
+			XMMatrixRotationQuaternion(kv.second[0].quaternion) *
+			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z);
+	}
+
+	multiplyMatrixRecursively(mNameToBoneMap["センター"], XMMatrixIdentity());
+
+	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
 }
