@@ -144,6 +144,8 @@ bool RendererDX12::render()
 {
 	static float angle = 0.0f;
 
+	mpPMDActor->update();
+
 	*reinterpret_cast<SceneData *>(mpMappedSceneConstantBuffer) = mSceneData;
 
 	beginDraw();
@@ -770,7 +772,8 @@ void RendererDX12::drawIndexedInstanced(
 bool RendererDX12::loadModel()
 {
 	mpPMDActor.reset(new PMDActor("model/miku.pmd", *this));
-	mpPMDActor->loadVMD("motion/pose.vmd");
+	mpPMDActor->loadVMD("motion/swing2.vmd");
+	mpPMDActor->startAnimation();
 
 	return true;
 }

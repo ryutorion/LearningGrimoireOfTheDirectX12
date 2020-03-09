@@ -3,6 +3,7 @@
 #define PMD_ACTOR_H_INCLUDED
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -22,7 +23,11 @@ public:
 
 	bool loadVMD(const char * path_str);
 
+	void update();
+
 	void draw(RendererDX12 & renderer);
+
+	void startAnimation();
 
 private:
 	bool createTransformDescriptorHeap(RendererDX12 & renderer);
@@ -102,14 +107,34 @@ private:
 	{
 		uint32_t frameNo;
 		DirectX::XMVECTOR quaternion;
+		DirectX::XMFLOAT2 p1;
+		DirectX::XMFLOAT2 p2;
 
-		KeyFrame(const uint32_t frame_no, const DirectX::XMVECTOR & q)
+		KeyFrame(
+			const uint32_t frame_no,
+			const DirectX::XMVECTOR & q,
+			const DirectX::XMFLOAT2 & vp1,
+			const DirectX::XMFLOAT2 & vp2
+		)
 			: frameNo(frame_no)
 			, quaternion(q)
+			, p1(vp1)
+			, p2(vp2)
+		{}
+
+		KeyFrame(const KeyFrame & key_frame)
+			: frameNo(key_frame.frameNo)
+			, quaternion(key_frame.quaternion)
+			, p1(key_frame.p1)
+			, p2(key_frame.p2)
 		{}
 	};
 
 	std::unordered_map<std::string, std::vector<KeyFrame>> mNameToKeyFrameMap;
+
+	std::chrono::high_resolution_clock::time_point mStartTime;
+
+	uint32_t mMaxFrame = 0;
 };
 
 #endif // PMD_ACTOR_H_INCLUDED

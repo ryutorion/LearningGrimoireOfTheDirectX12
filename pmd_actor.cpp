@@ -70,13 +70,33 @@ bool PMDActor::loadVMD(const char * path_str)
 	{
 		mNameToKeyFrameMap[vmd_key_frame.boneName].emplace_back(
 			vmd_key_frame.frameNo,
-			XMLoadFloat4(&vmd_key_frame.quaternion)
+			XMLoadFloat4(&vmd_key_frame.quaternion),
+			XMFLOAT2(vmd_key_frame.bezier[3] / 127.0f, vmd_key_frame.bezier[7] / 127.0f),
+			XMFLOAT2(vmd_key_frame.bezier[11] / 127.0f, vmd_key_frame.bezier[15] / 127.0f)
 		);
 	}
 
-	updateMotion();
+	mMaxFrame = 0;
+	for(auto & kv : mNameToKeyFrameMap)
+	{
+		std::sort(
+			kv.second.begin(),
+			kv.second.end(),
+			[](const KeyFrame & lhs, const KeyFrame & rhs)
+			{
+				return lhs.frameNo < rhs.frameNo;
+			}
+		);
+
+		mMaxFrame = max(mMaxFrame, kv.second[kv.second.size() - 1].frameNo);
+	}
 
 	return true;
+}
+
+void PMDActor::update()
+{
+	updateMotion();
 }
 
 void PMDActor::draw(RendererDX12 & renderer)
@@ -103,6 +123,11 @@ void PMDActor::draw(RendererDX12 & renderer)
 		material_handle.ptr += material_handle_size * 5;
 		index_offset += m.indexCount;
 	}
+}
+
+void PMDActor::startAnimation()
+{
+	mStartTime = chrono::high_resolution_clock::now();
 }
 
 bool PMDActor::createTransformDescriptorHeap(RendererDX12 & renderer)
@@ -572,15 +597,95 @@ void PMDActor::multiplyMatrixRecursively(
 	}
 }
 
+static float getYFromXOnBezier(float x, const XMFLOAT2 & a, const XMFLOAT2 & b, int32_t n)
+{
+	if(a.x == a.y && b.x == b.y)
+	{
+		return x;
+	}
+
+	float t = x;
+	const float k0 = 1.0f + 3.0f * a.x - 3.0f * b.x;
+	const float k1 = 3.0f * b.x - 6.0f * a.x;
+	const float k2 = 3.0f * a.x;
+
+	constexpr float epsilon = 0.0005f;
+
+	for(int32_t i = 0; i < n; ++i)
+	{
+		auto ft = k0 * t + k1;
+		ft = ft * t + k2;
+		ft = ft * t - x;
+
+		if(-epsilon <= ft && ft <= epsilon)
+		{
+			break;
+		}
+
+		t -= ft * 0.5f;
+
+	}
+
+	auto r = 1.0f - t;
+	return t * t * t + 3.0f * t * t * r * b.y + 3.0f * t * r * r * a.y;
+}
+
 void PMDActor::updateMotion()
 {
+	auto elapsed_milliseconds = chrono::duration_cast<chrono::milliseconds>(
+		chrono::high_resolution_clock::now() - mStartTime
+	).count();
+	auto frame_per_sec = 30.0f;
+	auto frame = static_cast<uint64_t>(
+		floor((elapsed_milliseconds / 1000.0) / (1.0 / frame_per_sec))
+	);
+
+	frame %= mMaxFrame;
+
+	fill(mBoneMatrices.begin(), mBoneMatrices.end(), XMMatrixIdentity());
+
 	for(auto & kv : mNameToKeyFrameMap)
 	{
-		auto & bone = mNameToBoneMap[kv.first];
+		auto it_bone = mNameToBoneMap.find(kv.first);
+		if(it_bone == mNameToBoneMap.end())
+		{
+			continue;
+		}
+
+		auto & bone = it_bone->second;
+		auto & motions = kv.second;
+
+		auto it = find_if(
+			motions.rbegin(),
+			motions.rend(),
+			[frame](const KeyFrame & key_frame)
+			{
+				return key_frame.frameNo <= frame;
+			}
+		);
+
+		if(it == motions.rend())
+		{
+			continue ;
+		}
 		auto & bone_position = bone.startPosition;
+
+		XMVECTOR rotation = it->quaternion;
+		auto next = it.base();
+		if(next != motions.end())
+		{
+			auto t = 
+				static_cast<float>(frame - it->frameNo) /
+				static_cast<float>(next->frameNo - it->frameNo);
+
+			t = getYFromXOnBezier(t, next->p1, next->p2, 12);
+
+			rotation = XMQuaternionSlerp(it->quaternion, next->quaternion, t);
+		}
+
 		mBoneMatrices[bone.boneIndex] =
 			XMMatrixTranslation(-bone_position.x, -bone_position.y, -bone_position.z) *
-			XMMatrixRotationQuaternion(kv.second[0].quaternion) *
+			XMMatrixRotationQuaternion(rotation) *
 			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z);
 	}
 
