@@ -2,6 +2,8 @@
 #include "renderer_dx12.h"
 #include "pmd.h"
 #include <algorithm>
+#include <cassert>
+#include <sstream>
 #include <d3dx12.h>
 
 using namespace std;
@@ -71,6 +73,7 @@ bool PMDActor::loadVMD(const char * path_str)
 		mNameToKeyFrameMap[vmd_key_frame.boneName].emplace_back(
 			vmd_key_frame.frameNo,
 			XMLoadFloat4(&vmd_key_frame.quaternion),
+			vmd_key_frame.location,
 			XMFLOAT2(vmd_key_frame.bezier[3] / 127.0f, vmd_key_frame.bezier[7] / 127.0f),
 			XMFLOAT2(vmd_key_frame.bezier[11] / 127.0f, vmd_key_frame.bezier[15] / 127.0f)
 		);
@@ -166,15 +169,16 @@ bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 
 	for(auto & kv : mNameToKeyFrameMap)
 	{
-		auto & bone = mNameToBoneMap[kv.first];
+		auto boneIndex = mNameToBoneIndex[kv.first];
+		auto & bone = mBones[boneIndex];
 		auto & bone_position = bone.startPosition;
-		mBoneMatrices[bone.boneIndex] =
+		mBoneMatrices[boneIndex] =
 			XMMatrixTranslation(-bone_position.x, -bone_position.y, -bone_position.z) *
 			XMMatrixRotationQuaternion(kv.second[0].quaternion) *
 			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z);
 	}
 
-	multiplyMatrixRecursively(mNameToBoneMap["センター"], XMMatrixIdentity());
+	multiplyMatrixRecursively(mNameToBoneIndex["センター"], XMMatrixIdentity());
 
 	*mpMappedTransform = XMMatrixIdentity();
 	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
@@ -218,6 +222,11 @@ bool PMDActor::load(const char * pathStr, RendererDX12 & renderer)
 	}
 
 	if(!loadBones(fin, renderer))
+	{
+		return false;
+	}
+
+	if(!loadIK(fin))
 	{
 		return false;
 	}
@@ -486,15 +495,16 @@ bool PMDActor::loadBones(std::ifstream & fin, RendererDX12 & renderer)
 	vector<PMDBone> pmd_bones(bone_count);
 	fin.read(reinterpret_cast<char *>(pmd_bones.data()), sizeof(pmd_bones[0]) * pmd_bones.size());
 
-	vector<string> bone_names(bone_count);
-	for(size_t i = 0; i < pmd_bones.size(); ++i)
+	mBones.resize(bone_count);
+	for(uint32_t i = 0; i < pmd_bones.size(); ++i)
 	{
 		auto & pmd_bone = pmd_bones[i];
-		bone_names[i] = pmd_bone.boneName;
+		auto & bone = mBones[i];
 
-		auto & bone = mNameToBoneMap[pmd_bone.boneName];
-		bone.boneIndex = i;
+		bone.boneName = pmd_bone.boneName;
 		bone.startPosition = pmd_bone.pos;
+
+		mNameToBoneIndex[bone.boneName] = i;
 	}
 
 	for(auto & pmd_bone : pmd_bones)
@@ -504,12 +514,54 @@ bool PMDActor::loadBones(std::ifstream & fin, RendererDX12 & renderer)
 			continue;
 		}
 
-		auto parent_name = bone_names[pmd_bone.parentNo];
-		mNameToBoneMap[parent_name].children.emplace_back(&mNameToBoneMap[pmd_bone.boneName]);
+		auto boneIndex = mNameToBoneIndex[pmd_bone.boneName];
+		mBones[pmd_bone.parentNo].children.emplace_back(boneIndex);
 	}
 
 	mBoneMatrices.resize(bone_count);
 	fill(mBoneMatrices.begin(), mBoneMatrices.end(), XMMatrixIdentity());
+
+	return true;
+}
+
+bool PMDActor::loadIK(std::ifstream & fin)
+{
+	uint16_t ik_count = 0;
+	fin.read(reinterpret_cast<char *>(&ik_count), sizeof(ik_count));
+
+	mIKs.resize(ik_count);
+	for(auto & ik : mIKs)
+	{
+		fin.read(reinterpret_cast<char *>(&ik.boneIndex), sizeof(ik.boneIndex));
+		fin.read(reinterpret_cast<char *>(&ik.targetIndex), sizeof(ik.targetIndex));
+
+		uint8_t chain_length = 0;
+		fin.read(reinterpret_cast<char *>(&chain_length), sizeof(chain_length));
+		fin.read(reinterpret_cast<char *>(&ik.iterations), sizeof(ik.iterations));
+		fin.read(reinterpret_cast<char *>(&ik.limit), sizeof(ik.limit));
+
+		if(chain_length == 0)
+		{
+			continue;
+		}
+
+		ik.nodeIndices.resize(chain_length);
+		fin.read(
+			reinterpret_cast<char *>(ik.nodeIndices.data()),
+			sizeof(ik.nodeIndices[0]) * ik.nodeIndices.size()
+		);
+
+#if defined(_DEBUG)
+		ostringstream oss;
+		oss << "IKボーン番号:" << ik.boneIndex << "(" << mBones[ik.boneIndex].boneName << ")" << endl;
+		for(auto & node : ik.nodeIndices)
+		{
+			oss << "\tノードボーン:" << node << "(" << mBones[node].boneName << ")" << endl;
+		}
+
+		OutputDebugStringA(oss.str().c_str());
+#endif
+	}
 
 	return true;
 }
@@ -584,16 +636,71 @@ bool PMDActor::createMaterialResourceViews(RendererDX12 & renderer)
 }
 
 void PMDActor::multiplyMatrixRecursively(
-	const BoneNode & bone,
+	const uint32_t boneIndex,
 	const DirectX::XMMATRIX & parent_matrix
 )
 {
-	auto & local_matrix = mBoneMatrices[bone.boneIndex];
+	auto & local_matrix = mBoneMatrices[boneIndex];
 	local_matrix *= parent_matrix;
 
-	for(const auto & child : bone.children)
+	for(const auto child : mBones[boneIndex].children)
 	{
-		multiplyMatrixRecursively(*child, local_matrix);
+		multiplyMatrixRecursively(child, local_matrix);
+	}
+}
+
+void PMDActor::solveLookAt(const IK & ik)
+{
+	auto & root_bone = mBones[ik.nodeIndices[0]];
+	auto & target_bone = mBones[ik.targetIndex];
+	auto & ik_bone = mBones[ik.boneIndex];
+
+	auto root_position = XMLoadFloat3(&root_bone.startPosition);
+	auto target_position = XMLoadFloat3(&target_bone.startPosition);
+	auto ik_position = XMLoadFloat3(&ik_bone.startPosition);
+
+	root_position = XMVector3Transform(root_position, mBoneMatrices[ik.nodeIndices[0]]);
+	target_position = XMVector3Transform(target_position, mBoneMatrices[ik.targetIndex]);
+	ik_position = XMVector3Transform(ik_position, mBoneMatrices[ik.boneIndex]);
+
+	auto src = XMVector3Normalize(XMVectorSubtract(target_position, root_position));
+	auto dst = XMVector3Normalize(XMVectorSubtract(ik_position, root_position));
+	float theta = acos(XMVectorGetX(XMVector3Dot(src, dst)));
+
+	auto rotation = XMMatrixRotationAxis(XMVector3Cross(src, dst), theta);
+
+	mBoneMatrices[ik.nodeIndices[0]] =
+		XMMatrixTranslationFromVector(XMVectorNegate(root_position)) *
+		rotation *
+		XMMatrixTranslationFromVector(root_position);
+}
+
+void PMDActor::solveCosineIK(const IK & ik)
+{
+}
+
+void PMDActor::solveCCDIK(const IK & ik)
+{
+}
+
+void PMDActor::solveIK()
+{
+	for(const auto & ik : mIKs)
+	{
+		switch(ik.nodeIndices.size())
+		{
+		case 0:
+			continue;
+		case 1:
+			solveLookAt(ik);
+			break;
+		case 2:
+			solveCosineIK(ik);
+			break;
+		default:
+			solveCCDIK(ik);
+			break;
+		}
 	}
 }
 
@@ -646,13 +753,13 @@ void PMDActor::updateMotion()
 
 	for(auto & kv : mNameToKeyFrameMap)
 	{
-		auto it_bone = mNameToBoneMap.find(kv.first);
-		if(it_bone == mNameToBoneMap.end())
+		auto it_bone = mNameToBoneIndex.find(kv.first);
+		if(it_bone == mNameToBoneIndex.end())
 		{
 			continue;
 		}
 
-		auto & bone = it_bone->second;
+		auto boneIndex = it_bone->second;
 		auto & motions = kv.second;
 
 		auto it = find_if(
@@ -668,9 +775,11 @@ void PMDActor::updateMotion()
 		{
 			continue ;
 		}
-		auto & bone_position = bone.startPosition;
+		auto & bone_position = mBones[boneIndex].startPosition;
 
 		XMVECTOR rotation = it->quaternion;
+		XMVECTOR translation = XMLoadFloat3(&it->offset);
+
 		auto next = it.base();
 		if(next != motions.end())
 		{
@@ -681,15 +790,19 @@ void PMDActor::updateMotion()
 			t = getYFromXOnBezier(t, next->p1, next->p2, 12);
 
 			rotation = XMQuaternionSlerp(it->quaternion, next->quaternion, t);
+			translation = XMVectorLerp(translation, XMLoadFloat3(&next->offset), t);
 		}
 
-		mBoneMatrices[bone.boneIndex] =
+		mBoneMatrices[boneIndex] =
 			XMMatrixTranslation(-bone_position.x, -bone_position.y, -bone_position.z) *
 			XMMatrixRotationQuaternion(rotation) *
-			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z);
+			XMMatrixTranslation(bone_position.x, bone_position.y, bone_position.z) *
+			XMMatrixTranslationFromVector(translation);
 	}
 
-	multiplyMatrixRecursively(mNameToBoneMap["センター"], XMMatrixIdentity());
+	multiplyMatrixRecursively(mNameToBoneIndex["センター"], XMMatrixIdentity());
+
+	solveIK();
 
 	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
 }

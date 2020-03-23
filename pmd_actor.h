@@ -52,11 +52,19 @@ private:
 
 	bool loadBones(std::ifstream & fin, RendererDX12 & renderer);
 
+	bool loadIK(std::ifstream & fin);
+
 	bool createMaterialDescriptorHeap(RendererDX12 & renderer);
 	bool createMaterialResourceViews(RendererDX12 & renderer);
 
 	struct BoneNode;
-	void multiplyMatrixRecursively(const BoneNode & bone, const DirectX::XMMATRIX & parent_matrix);
+	void multiplyMatrixRecursively(const uint32_t boneIndex, const DirectX::XMMATRIX & parent_matrix);
+
+	struct IK;
+	void solveLookAt(const IK & ik);
+	void solveCosineIK(const IK & ik);
+	void solveCCDIK(const IK & ik);
+	void solveIK();
 
 	void updateMotion();
 
@@ -92,13 +100,38 @@ private:
 
 	std::vector<DirectX::XMMATRIX> mBoneMatrices;
 
+	enum class BoneType : uint32_t
+	{
+		Rotation,
+		RotAndMove,
+		IK,
+		Undefined,
+		IKChild,
+		RotationChild,
+		IKDestination,
+		Invisible,
+	};
+
 	struct BoneNode
 	{
-		int32_t boneIndex;
+		BoneType boneType;
+		int32_t ikParentBone;
 		DirectX::XMFLOAT3 startPosition;
-		std::vector<BoneNode *> children;
+		std::string boneName;
+		std::vector<uint32_t> children;
 	};
-	std::map<std::string, BoneNode> mNameToBoneMap;
+	std::vector<BoneNode> mBones;
+	std::map<std::string, uint32_t> mNameToBoneIndex;
+
+	struct IK
+	{
+		uint16_t boneIndex;
+		uint16_t targetIndex;
+		uint16_t iterations;
+		float limit;
+		std::vector<uint16_t> nodeIndices;
+	};
+	std::vector<IK> mIKs;
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpMaterialDescriptorHeap;
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpMaterialConstantBuffer;
@@ -107,17 +140,20 @@ private:
 	{
 		uint32_t frameNo;
 		DirectX::XMVECTOR quaternion;
+		DirectX::XMFLOAT3 offset;
 		DirectX::XMFLOAT2 p1;
 		DirectX::XMFLOAT2 p2;
 
 		KeyFrame(
 			const uint32_t frame_no,
 			const DirectX::XMVECTOR & q,
+			const DirectX::XMFLOAT3 & ofs,
 			const DirectX::XMFLOAT2 & vp1,
 			const DirectX::XMFLOAT2 & vp2
 		)
 			: frameNo(frame_no)
 			, quaternion(q)
+			, offset(ofs)
 			, p1(vp1)
 			, p2(vp2)
 		{}
@@ -125,6 +161,7 @@ private:
 		KeyFrame(const KeyFrame & key_frame)
 			: frameNo(key_frame.frameNo)
 			, quaternion(key_frame.quaternion)
+			, offset(key_frame.offset)
 			, p1(key_frame.p1)
 			, p2(key_frame.p2)
 		{}
