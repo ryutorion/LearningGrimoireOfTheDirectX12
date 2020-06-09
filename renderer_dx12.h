@@ -128,9 +128,19 @@ private:
 	bool createNullBlack();
 	bool createNullGradation();
 
+	bool createPeraResource();
+	bool createPeraRTV();
+	bool createPeraSRV();
+	bool createPeraVertexBuffer();
+	bool createPeraRootSignature();
+	bool createPeraGraphicsPipelineState();
+	void beginPeraDraw();
+	void endPeraDraw();
+
 	bool loadModel();
 	bool createSceneDescriptorHeap();
 	bool createSceneConstantBuffer();
+
 private:
 	uint32_t mWidth = 0;
 	uint32_t mHeight = 0;
@@ -187,13 +197,20 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpNullGradation;
 
 	std::unique_ptr<PMDRenderer> mpPMDRenderer;
-	std::unique_ptr<PMDActor> mpPMDActor;
 
 	std::map<
 		std::filesystem::path,
 		Microsoft::WRL::ComPtr<ID3D12Resource>
 	> mTextureCache;
 
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpPeraResource;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpPeraRTVDescriptorHeap;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mpPeraSRVDescriptorHeap;
+	Microsoft::WRL::ComPtr<ID3D12Resource> mpPeraVertexBuffer;
+	D3D12_VERTEX_BUFFER_VIEW mPeraVertexBufferView;
+
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> mpPeraRootSignature;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> mpPeraGraphicsPipelineState;
 };
 
 #endif // RENDERER_DX12_H_INCLUDED

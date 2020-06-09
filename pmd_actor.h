@@ -29,6 +29,9 @@ public:
 
 	void startAnimation();
 
+	void setPosition(float x, float y, float z);
+	void setEulerAngle(float x, float y, float z);
+
 private:
 	bool createTransformDescriptorHeap(RendererDX12 & renderer);
 	bool createTransformConstantBuffer(RendererDX12 & renderer);
@@ -69,6 +72,9 @@ private:
 	void updateMotion();
 
 private:
+	DirectX::XMFLOAT3 mPosition = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+	DirectX::XMFLOAT3 mEulerAngle = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+
 	Microsoft::WRL::ComPtr<ID3D12Resource> mpVertexBuffer;
 	D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
 
@@ -166,6 +172,13 @@ private:
 			, p2(key_frame.p2)
 		{}
 	};
+
+	struct IKEnable
+	{
+		uint32_t frameNo;
+		std::vector<bool> enables;
+	};
+	std::vector<IKEnable> mIKEnables;
 
 	std::unordered_map<std::string, std::vector<KeyFrame>> mNameToKeyFrameMap;
 

@@ -60,6 +60,7 @@ target_compile_definitions(
 	LearningGrimoireOfTheDirectX12
 	PRIVATE
 	WORKING_DIR="${CMAKE_CURRENT_LIST_DIR}"
+	_USE_MATH_DEFINES
 )
 
 target_link_directories(

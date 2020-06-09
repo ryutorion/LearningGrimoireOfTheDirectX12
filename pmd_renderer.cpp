@@ -26,6 +26,37 @@ void PMDRenderer::setup(RendererDX12 & renderer)
 	renderer.setGraphicsRootSignature(mpRootSignature);
 }
 
+void PMDRenderer::update()
+{
+	for(auto & p_actor : mpActors)
+	{
+		p_actor->update();
+	}
+}
+
+void PMDRenderer::draw(RendererDX12 & renderer)
+{
+	for(auto & p_actor : mpActors)
+	{
+		p_actor->draw(renderer);
+	}
+}
+
+PMDActor & PMDRenderer::addActor(const char * path_str, RendererDX12 & renderer)
+{
+	mpActors.emplace_back(new PMDActor(path_str, renderer));
+
+	return *mpActors.back();
+}
+
+void PMDRenderer::startActorAnimation()
+{
+	for(auto & p_actor : mpActors)
+	{
+		p_actor->startAnimation();
+	}
+}
+
 bool PMDRenderer::createRootSignature(RendererDX12 & renderer)
 {
 	CD3DX12_DESCRIPTOR_RANGE descriptor_ranges[4];

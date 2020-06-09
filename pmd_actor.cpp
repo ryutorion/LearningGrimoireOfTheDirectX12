@@ -10,6 +10,8 @@ using namespace std;
 using namespace DirectX;
 using namespace Microsoft::WRL;
 
+static constexpr float epsilon = 0.0005f;
+
 PMDActor::PMDActor(const char * path_str, RendererDX12 & renderer)
 {
 	if(!load(path_str, renderer))
@@ -94,11 +96,109 @@ bool PMDActor::loadVMD(const char * path_str)
 		mMaxFrame = max(mMaxFrame, kv.second[kv.second.size() - 1].frameNo);
 	}
 
+#if 0
+	uint32_t morph_count = 0;
+	fin.read(reinterpret_cast<char *>(&morph_count), sizeof(morph_count));
+
+#pragma pack(push, 1)
+	struct VMDMorph
+	{
+		char name[15];
+		uint32_t frameNo;
+		float weight;
+	};
+#pragma pack(pop)
+
+	vector<VMDMorph> morphs(morph_count);
+	fin.read(reinterpret_cast<char *>(morphs.data()), sizeof(morphs[0]) * morphs.size());
+
+	uint32_t camera_count = 0;
+	fin.read(reinterpret_cast<char *>(&camera_count), sizeof(camera_count));
+
+#pragma pack(push, 1)
+	struct VMDCamera
+	{
+		uint32_t frameNo;
+		float distance;
+		XMFLOAT3 position;
+		XMFLOAT3 eulerAngle;
+		uint8_t interpolation[24];
+		uint32_t fov;
+		uint8_t perspective;
+	};
+#pragma pack(pop)
+
+	vector<VMDCamera> cameras(camera_count);
+	fin.read(reinterpret_cast<char *>(cameras.data()), sizeof(cameras[0]) * cameras.size());
+
+	uint32_t light_count = 0;
+	struct VMDLight
+	{
+		uint32_t frameNo;
+		XMFLOAT3 rgb;
+		XMFLOAT3 position;
+	};
+
+	vector<VMDLight> lights(light_count);
+	fin.read(reinterpret_cast<char *>(lights.data()), sizeof(lights[0]) * lights.size());
+
+	uint32_t self_shadow_count = 0;
+	fin.read(reinterpret_cast<char *>(&self_shadow_count), sizeof(self_shadow_count));
+
+#pragma pack(push, 1)
+	struct VMDSelfShadow
+	{
+		uint32_t frameNo;
+		uint8_t mode;
+		float distance;
+	};
+#pragma pack(pop)
+	
+	vector<VMDSelfShadow> self_shadows(self_shadow_count);
+	fin.read(reinterpret_cast<char *>(self_shadows.data()), sizeof(self_shadows[0]) * self_shadows.size());
+
+	uint32_t ik_switch_count = 0;
+	fin.read(reinterpret_cast<char *>(&ik_switch_count), sizeof(ik_switch_count));
+
+	mIKEnables.resize(ik_switch_count);
+	for(auto & ik_enable : mIKEnables)
+	{
+		ik_enable.enables.resize(mBones.size());
+
+		fin.read(reinterpret_cast<char *>(&ik_enable.frameNo), sizeof(ik_enable.frameNo));
+
+		// visibleフラグをスキップ
+		fin.seekg(1, ios::cur);
+
+		uint32_t ik_bone_count = 0;
+		fin.read(reinterpret_cast<char *>(&ik_bone_count), sizeof(ik_bone_count));
+
+		for(uint32_t i = 0; i < ik_bone_count; ++i)
+		{
+			char ik_bone_name[20];
+			fin.read(ik_bone_name, sizeof(ik_bone_name));
+
+			uint8_t enable = 0;
+			fin.read(reinterpret_cast<char *>(&enable), sizeof(enable));
+
+			auto it = mNameToBoneIndex.find(ik_bone_name);
+			if(it != mNameToBoneIndex.end())
+			{
+				ik_enable.enables[it->second] = enable;
+			}
+		}
+	}
+#endif
+
 	return true;
 }
 
 void PMDActor::update()
 {
+	*mpMappedTransform = XMMatrixTranspose(
+		XMMatrixRotationRollPitchYaw(mEulerAngle.x, mEulerAngle.y, mEulerAngle.z) *
+		XMMatrixTranslation(mPosition.x, mPosition.y, mPosition.z)
+	);
 	updateMotion();
 }
 
@@ -131,6 +231,16 @@ void PMDActor::draw(RendererDX12 & renderer)
 void PMDActor::startAnimation()
 {
 	mStartTime = chrono::high_resolution_clock::now();
+}
+
+void PMDActor::setPosition(float x, float y, float z)
+{
+	mPosition = XMFLOAT3(x, y, z);
+}
+
+void PMDActor::setEulerAngle(float x, float y, float z)
+{
+	mEulerAngle = XMFLOAT3(x, y, z);
 }
 
 bool PMDActor::createTransformDescriptorHeap(RendererDX12 & renderer)
@@ -180,7 +290,10 @@ bool PMDActor::createTransformConstantBuffer(RendererDX12 & renderer)
 
 	multiplyMatrixRecursively(mNameToBoneIndex["センター"], XMMatrixIdentity());
 
-	*mpMappedTransform = XMMatrixIdentity();
+	*mpMappedTransform = XMMatrixTranspose(
+		XMMatrixRotationRollPitchYaw(mEulerAngle.x, mEulerAngle.y, mEulerAngle.z) *
+		XMMatrixTranslation(mPosition.x, mPosition.y, mPosition.z)
+	);
 	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
 
 	renderer.createConstantBufferView(
@@ -501,6 +614,7 @@ bool PMDActor::loadBones(std::ifstream & fin, RendererDX12 & renderer)
 		auto & pmd_bone = pmd_bones[i];
 		auto & bone = mBones[i];
 
+		bone.boneType = static_cast<BoneType>(pmd_bone.type);
 		bone.boneName = pmd_bone.boneName;
 		bone.startPosition = pmd_bone.pos;
 
@@ -649,38 +763,178 @@ void PMDActor::multiplyMatrixRecursively(
 	}
 }
 
+static XMMATRIX lookAt(const XMVECTOR & dir, const XMVECTOR & up, const XMVECTOR & right)
+{
+	XMVECTOR z = dir;
+	XMVECTOR y = XMVector3Normalize(up);
+	XMVECTOR x = XMVector3Normalize(XMVector3Cross(y, z));
+	y = XMVector3Cross(x, z);
+
+	if(abs(XMVectorGetX(XMVector3Dot(y, z))) == 1.0f)
+	{
+		x = XMVector3Normalize(right);
+		y = XMVector3Normalize(XMVector3Cross(z, x));
+		x = XMVector3Cross(y, z);
+	}
+
+	XMMATRIX result = XMMatrixIdentity();
+	result.r[0] = x;
+	result.r[1] = y;
+	result.r[2] = z;
+
+	return result;
+}
+
+static XMMATRIX lookAt(const XMVECTOR & eye, const XMVECTOR & at, const XMVECTOR & up, const XMVECTOR & right)
+{
+	return XMMatrixTranspose(lookAt(eye, up, right)) * lookAt(at, up, right);
+}
+
 void PMDActor::solveLookAt(const IK & ik)
 {
 	auto & root_bone = mBones[ik.nodeIndices[0]];
 	auto & target_bone = mBones[ik.targetIndex];
-	auto & ik_bone = mBones[ik.boneIndex];
 
-	auto root_position = XMLoadFloat3(&root_bone.startPosition);
-	auto target_position = XMLoadFloat3(&target_bone.startPosition);
-	auto ik_position = XMLoadFloat3(&ik_bone.startPosition);
+	auto opos1 = XMLoadFloat3(&root_bone.startPosition);
+	auto tpos1 = XMLoadFloat3(&target_bone.startPosition);
 
-	root_position = XMVector3Transform(root_position, mBoneMatrices[ik.nodeIndices[0]]);
-	target_position = XMVector3Transform(target_position, mBoneMatrices[ik.targetIndex]);
-	ik_position = XMVector3Transform(ik_position, mBoneMatrices[ik.boneIndex]);
+	auto opos2 = XMVector3Transform(opos1, mBoneMatrices[ik.nodeIndices[0]]);
+	auto tpos2 = XMVector3Transform(tpos1, mBoneMatrices[ik.boneIndex]);
 
-	auto src = XMVector3Normalize(XMVectorSubtract(target_position, root_position));
-	auto dst = XMVector3Normalize(XMVectorSubtract(ik_position, root_position));
-	float theta = acos(XMVectorGetX(XMVector3Dot(src, dst)));
-
-	auto rotation = XMMatrixRotationAxis(XMVector3Cross(src, dst), theta);
+	auto originVec = XMVector3Normalize(tpos1 - opos1);
+	auto targetVec = XMVector3Normalize(tpos2 - opos2);
 
 	mBoneMatrices[ik.nodeIndices[0]] =
-		XMMatrixTranslationFromVector(XMVectorNegate(root_position)) *
-		rotation *
-		XMMatrixTranslationFromVector(root_position);
+		XMMatrixTranslationFromVector(-opos2) *
+		lookAt(originVec, targetVec, XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)) *
+		XMMatrixTranslationFromVector(opos2);
 }
 
 void PMDActor::solveCosineIK(const IK & ik)
 {
+	auto & ik_bone = mBones[ik.boneIndex];
+	auto ik_position = XMVector3Transform(XMLoadFloat3(&ik_bone.startPosition), mBoneMatrices[ik.boneIndex]);
+
+	auto target_bone = mBones[ik.targetIndex];
+	XMVECTOR positions[]
+	{
+		XMLoadFloat3(&mBones[ik.nodeIndices[1]].startPosition),
+		XMLoadFloat3(&mBones[ik.nodeIndices[0]].startPosition),
+		XMLoadFloat3(&target_bone.startPosition),
+	};
+
+	float edge_lengths[]
+	{
+		XMVectorGetX(XMVector3Length(positions[1] - positions[0])),
+		XMVectorGetX(XMVector3Length(positions[2] - positions[1])),
+	};
+
+	positions[0] = XMVector3Transform(positions[0], mBoneMatrices[ik.nodeIndices[1]]);
+	positions[2] = XMVector3Transform(positions[2], mBoneMatrices[ik.boneIndex]);
+
+	auto linearVec = positions[2] - positions[0];
+	float A = XMVectorGetX(XMVector3Length(linearVec));
+	float B = edge_lengths[0];
+	float C = edge_lengths[1];
+
+	linearVec = XMVector3Normalize(linearVec);
+
+	float theta1 = acos((A * A + B * B - C * C) / (2.0f * A * B));
+	float theta2 = acos((B * B + C * C - A * A) / (2.0f * B * C));
+
+	XMVECTOR axis;
+	if(mBones[ik.nodeIndices[0]].boneName.find("ひざ") != string::npos)
+	{
+		axis = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+	}
+	else
+	{
+		auto vm = XMVector3Normalize(positions[2] - positions[0]);
+		auto vt = XMVector3Normalize(ik_position - positions[0]);
+		axis = XMVector3Cross(vt, vm);
+	}
+
+	auto r0 =
+		XMMatrixTranslationFromVector(-positions[0]) *
+		XMMatrixRotationAxis(axis, theta1) *
+		XMMatrixTranslationFromVector(positions[0]);
+
+	auto r1 =
+		XMMatrixTranslationFromVector(-positions[1]) *
+		XMMatrixRotationAxis(axis, theta2 - XM_PI) *
+		XMMatrixTranslationFromVector(positions[1]);
+
+	mBoneMatrices[ik.nodeIndices[1]] *= r0;
+	mBoneMatrices[ik.nodeIndices[0]] = r1 * mBoneMatrices[ik.nodeIndices[1]];
+	mBoneMatrices[ik.targetIndex] = mBoneMatrices[ik.nodeIndices[0]];
 }
 
 void PMDActor::solveCCDIK(const IK & ik)
 {
+	auto & ik_bone = mBones[ik.boneIndex];
+	auto ik_position = XMLoadFloat3(&ik_bone.startPosition);
+
+	auto & parent_matrix = mBoneMatrices[ik_bone.ikParentBone];
+	XMVECTOR determinant;
+	auto inverse_parent_matrix = XMMatrixInverse(&determinant, parent_matrix);
+	auto target_next_position = XMVector3Transform(ik_position, mBoneMatrices[ik.boneIndex] * inverse_parent_matrix);
+
+	vector<XMVECTOR> bone_positions;
+	auto target_position = XMLoadFloat3(&mBones[ik.targetIndex].startPosition);
+	for(auto node_index : ik.nodeIndices)
+	{
+		bone_positions.push_back(XMLoadFloat3(&mBones[node_index].startPosition));
+	}
+
+	vector<XMMATRIX> matrices(bone_positions.size(), XMMatrixIdentity());
+
+	auto ik_limit = ik.limit * XM_PI;
+	for(auto c = 0; c < ik.iterations; ++c)
+	{
+		if(XMVectorGetX(XMVector3Length(target_position - target_next_position)) <= epsilon)
+		{
+			break;
+		}
+
+		for(int bone_index = 0; bone_index < bone_positions.size(); ++bone_index)
+		{
+			const auto & position = bone_positions[bone_index];
+			auto vec_to_target = XMVector3Normalize(target_position - position);
+			auto vec_to_next_target = XMVector3Normalize(target_next_position - position);
+
+			if(XMVectorGetX(XMVector3Length(vec_to_target - vec_to_next_target)) <= epsilon)
+			{
+				continue;
+			}
+
+			auto cross = XMVector3Normalize(XMVector3Cross(vec_to_target, vec_to_next_target));
+			float angle = min(XMVectorGetX(XMVector3AngleBetweenVectors(vec_to_target, vec_to_next_target)), ik_limit);
+			XMMATRIX m =
+				XMMatrixTranslationFromVector(-position) *
+				XMMatrixRotationAxis(cross, angle) *
+				XMMatrixTranslationFromVector(position);
+
+			matrices[bone_index] *= m;
+
+			for(auto index = bone_index - 1; index >= 0; --index)
+			{
+				bone_positions[index] = XMVector3Transform(bone_positions[index], m);
+			}
+
+			target_position = XMVector3Transform(target_position, m);
+			if(XMVectorGetX(XMVector3Length(target_position - target_next_position)) <= epsilon)
+			{
+				break;
+			}
+		}
+	}
+
+	for(auto i = 0; i < matrices.size(); ++i)
+	{
+		mBoneMatrices[ik.nodeIndices[i]] = matrices[i];
+	}
+
+	multiplyMatrixRecursively(ik.nodeIndices.back(), parent_matrix);
 }
 
 void PMDActor::solveIK()
@@ -749,6 +1003,8 @@ void PMDActor::updateMotion()
 
 	frame %= mMaxFrame;
 
+	// frame = frame_value;
+
 	fill(mBoneMatrices.begin(), mBoneMatrices.end(), XMMatrixIdentity());
 
 	for(auto & kv : mNameToKeyFrameMap)
@@ -802,7 +1058,7 @@ void PMDActor::updateMotion()
 
 	multiplyMatrixRecursively(mNameToBoneIndex["センター"], XMMatrixIdentity());
 
-	solveIK();
+	// solveIK();
 
 	copy(mBoneMatrices.begin(), mBoneMatrices.end(), mpMappedTransform + 1);
 }
